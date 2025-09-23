@@ -1,0 +1,4 @@
+Flask==3.1.2
+requests==2.32.3
+duckduckgo-search==8.1.1
+gunicorn==23.0.0
