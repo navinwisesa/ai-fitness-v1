@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 # Environment variables for API keys
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
-                               "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")
+                               "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")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "meta-llama/llama-3.3-70b-instruct:free"
