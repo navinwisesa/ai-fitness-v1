@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  app:
+    image: 'aifitness'
+    ports:
+      - "5001:5000"
+    volumes:
+      - .:/app
+
+  
