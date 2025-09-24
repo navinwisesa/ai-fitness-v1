@@ -258,55 +258,132 @@ def estimate_workout_duration(exercises):
     base_time = 15
     exercise_time = len(exercises) * 8
     return min(base_time + exercise_time, 120)
-def search_exercise_images(exercise_name, max_results=3):
-    """Search for exercise demonstration images/GIFs using DuckDuckGo"""
+def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
+    """Enhanced search for exercise demonstration images/GIFs"""
     try:
         with DDGS() as ddgs:
-            gif_results = []
-            try:
-                gif_search_results = list(ddgs.images(
-                    keywords=f"{exercise_name} exercise demonstration gif animated how to",
-                    max_results=max_results * 2,
-                    safesearch='moderate',
-                    size='Medium'
-                ))
-                
-                for img in gif_search_results:
-                    if img.get('image') and img.get('title'):
-                        url = img['image'].lower()
-                        title = img['title'].lower()
-                        
-                        is_animated = (
-                            url.endswith('.gif') or 
-                            '.gif' in url or
-                            'gif' in title or
-                            'animated' in title or
-                            'animation' in title or
-                            'demo' in title or
-                            'demonstration' in title
-                        )
-                        
-                        if is_animated:
-                            gif_results.append({
-                                'url': img['image'],
-                                'title': img['title'],
-                                'source': img.get('source', ''),
-                                'width': img.get('width', 0),
-                                'height': img.get('height', 0),
-                                'type': 'animated'
-                            })
-                
-                if len(gif_results) >= max_results:
-                    return gif_results[:max_results]
-                
-            except Exception as gif_error:
-                print(f"GIF search failed for {exercise_name}: {gif_error}")
+            all_results = []
             
-            return gif_results[:max_results]
+            # Search queries with different priorities
+            search_queries = [
+                f"{exercise_name} exercise animated gif demonstration",
+                f"{exercise_name} workout technique gif",
+                f"how to do {exercise_name} animated",
+                f"{exercise_name} proper form demonstration",
+                f"{exercise_name} exercise tutorial"
+            ]
+            
+            for query in search_queries:
+                if len(all_results) >= max_results * 2:
+                    break
+                    
+                try:
+                    search_results = list(ddgs.images(
+                        keywords=query,
+                        max_results=max_results,
+                        safesearch='moderate',
+                        size='Medium'
+                    ))
+                    
+                    for img in search_results:
+                        if img.get('image') and img.get('title'):
+                            url = img['image'].lower()
+                            title = img['title'].lower()
+                            
+                            # Better detection for exercise-related content
+                            is_exercise_related = (
+                                any(term in title for term in ['exercise', 'workout', 'fitness', 'training']) or
+                                any(term in url for term in ['exercise', 'workout', 'fitness'])
+                            )
+                            
+                            is_animated = (
+                                url.endswith('.gif') or 
+                                '.gif' in url or
+                                'gif' in title or
+                                'animated' in title
+                            )
+                            
+                            # Prioritize animated if requested, but include static if needed
+                            if is_exercise_related and (is_animated or not prefer_animated or len(all_results) < max_results):
+                                all_results.append({
+                                    'url': img['image'],
+                                    'title': img['title'],
+                                    'source': img.get('source', ''),
+                                    'width': img.get('width', 0),
+                                    'height': img.get('height', 0),
+                                    'type': 'animated' if is_animated else 'static',
+                                    'exercise_match_score': _calculate_exercise_match_score(exercise_name, img['title'])
+                                })
+                                
+                except Exception as query_error:
+                    print(f"Query '{query}' failed: {query_error}")
+                    continue
+            
+            # Sort by relevance and remove duplicates
+            unique_results = _remove_duplicate_images(all_results)
+            sorted_results = sorted(unique_results, 
+                                  key=lambda x: (x['exercise_match_score'], x['type'] == 'animated'), 
+                                  reverse=True)
+            
+            return sorted_results[:max_results]
             
     except Exception as e:
         print(f"Image search error for {exercise_name}: {e}")
         return []
+
+def _calculate_exercise_match_score(exercise_name, image_title):
+    """Calculate how well the image title matches the exercise name"""
+    exercise_terms = exercise_name.lower().split()
+    title_lower = image_title.lower()
+    
+    score = 0
+    for term in exercise_terms:
+        if term in title_lower:
+            score += 1
+    
+    # Bonus points for exact matches and exercise-related terms
+    if exercise_name.lower() in title_lower:
+        score += 2
+        
+    if any(keyword in title_lower for keyword in ['exercise', 'workout', 'how to', 'tutorial']):
+        score += 1
+        
+    return score
+
+def _remove_duplicate_images(images):
+    """Remove duplicate images based on URL similarity"""
+    unique_images = []
+    seen_urls = set()
+    
+    for img in images:
+        # Basic URL normalization
+        url = img['url'].split('?')[0]  # Remove query parameters
+        
+        if url not in seen_urls:
+            seen_urls.add(url)
+            unique_images.append(img)
+    
+    return unique_images
+
+def extract_exercises_from_workout_plan(workout_plan_text):
+    """Extract all exercises from a workout plan text"""
+    exercises = []
+    
+    # Pattern to match exercise lines in workout plans
+    patterns = [
+        r'[•\-]\s*([^:]+?)\s*:\s*\d+\s*sets?',  # - Exercise: 3 sets
+        r'[•\-]\s*([^:]+?)\s*-\s*\d+x\d+',      # - Exercise - 3x12
+        r'\*\*([^*]+)\*\*:\s*\d+\s*sets?',      # **Exercise**: 3 sets
+    ]
+    
+    for pattern in patterns:
+        matches = re.finditer(pattern, workout_plan_text, re.IGNORECASE)
+        for match in matches:
+            exercise_name = match.group(1).strip()
+            if _is_valid_exercise_name(exercise_name):
+                exercises.append(exercise_name)
+    
+    return list(set(exercises))  # Remove duplicates
 
 def should_include_images(user_message, ai_response):
     """Determine if content warrants exercise images"""
