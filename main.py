@@ -1,627 +1,484 @@
-import 'package:flutter/material.dart';
-import 'dart:async';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+from flask import Flask, request, jsonify
+import requests
+import os
+from duckduckgo_search import DDGS
+import json
+from datetime import datetime
+import re
 
-// Data class for exercise images
-class ExerciseImage {
-  final String url;
-  final String title;
-  final String source;
-  final int width;
-  final int height;
-  final String type; // 'animated' or 'static'
+app = Flask(__name__)
 
-  ExerciseImage({
-    required this.url,
-    required this.title,
-    required this.source,
-    required this.width,
-    required this.height,
-    required this.type,
-  });
+# Environment variables for API keys
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
+                               "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")
 
-  factory ExerciseImage.fromJson(Map<String, dynamic> json) {
-    return ExerciseImage(
-      url: json['url'] ?? '',
-      title: json['title'] ?? '',
-      source: json['source'] ?? '',
-      width: json['width'] ?? 0,
-      height: json['height'] ?? 0,
-      type: json['type'] ?? 'static',
-    );
-  }
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
-  Map<String, dynamic> toJson() {
-    return {
-      'url': url,
-      'title': title,
-      'source': source,
-      'width': width,
-      'height': height,
-      'type': type,
-    };
-  }
+# Fitness-related terms that indicate image-worthy content
+FITNESS_INDICATORS = [
+    'exercise', 'workout', 'stretch', 'movement', 'pose', 'position', 'form',
+    'technique', 'drill', 'routine', 'training', 'bicep', 'tricep', 'chest',
+    'back', 'shoulder', 'leg', 'core', 'abs', 'glute', 'cardio', 'strength',
+    'flexibility', 'mobility', 'yoga', 'pilates', 'calisthenics', 'bodyweight',
+    'dumbbell', 'barbell', 'kettlebell', 'resistance', 'band', 'machine'
+]
 
-  bool get isAnimated => type == 'animated';
-}
+def search_exercise_images(exercise_name, max_results=3):
+    """
+    Search for exercise demonstration images/GIFs using DuckDuckGo with priority on animated content
+    """
+    try:
+        with DDGS() as ddgs:
+            # First attempt: Search specifically for GIFs and animated demonstrations
+            gif_results = []
+            try:
+                gif_search_results = list(ddgs.images(
+                    keywords=f"{exercise_name} exercise demonstration gif animated how to",
+                    max_results=max_results * 2,  # Get more results to filter
+                    safesearch='moderate',
+                    size='Medium'
+                ))
+                
+                # Filter for likely GIFs/animated content
+                for img in gif_search_results:
+                    if img.get('image') and img.get('title'):
+                        url = img['image'].lower()
+                        title = img['title'].lower()
+                        
+                        # Check if it's likely a GIF or animated content
+                        is_animated = (
+                            url.endswith('.gif') or 
+                            '.gif' in url or
+                            'gif' in title or
+                            'animated' in title or
+                            'animation' in title or
+                            'demo' in title or
+                            'demonstration' in title
+                        )
+                        
+                        if is_animated:
+                            gif_results.append({
+                                'url': img['image'],
+                                'title': img['title'],
+                                'source': img.get('source', ''),
+                                'width': img.get('width', 0),
+                                'height': img.get('height', 0),
+                                'type': 'animated'
+                            })
+                
+                print(f"Found {len(gif_results)} animated results for {exercise_name}")
+                
+            except Exception as gif_error:
+                print(f"GIF search failed for {exercise_name}: {gif_error}")
+            
+            # If we have enough GIFs, return them
+            if len(gif_results) >= max_results:
+                return gif_results[:max_results]
+            
+            # Second attempt: Search for regular demonstration images
+            static_results = []
+            remaining_needed = max_results - len(gif_results)
+            
+            if remaining_needed > 0:
+                try:
+                    static_search_results = list(ddgs.images(
+                        keywords=f"{exercise_name} exercise technique form proper demonstration",
+                        max_results=remaining_needed * 2,
+                        safesearch='moderate',
+                        size='Medium',
+                        type_image='photo'
+                    ))
+                    
+                    # Filter static images, avoiding duplicates from GIF search
+                    existing_urls = {img['url'] for img in gif_results}
+                    
+                    for img in static_search_results:
+                        if (img.get('image') and 
+                            img.get('title') and 
+                            img['image'] not in existing_urls):
+                            
+                            static_results.append({
+                                'url': img['image'],
+                                'title': img['title'],
+                                'source': img.get('source', ''),
+                                'width': img.get('width', 0),
+                                'height': img.get('height', 0),
+                                'type': 'static'
+                            })
+                            
+                            if len(static_results) >= remaining_needed:
+                                break
+                    
+                    print(f"Found {len(static_results)} static results for {exercise_name}")
+                    
+                except Exception as static_error:
+                    print(f"Static image search failed for {exercise_name}: {static_error}")
+            
+            # Combine results: GIFs first, then static images
+            combined_results = gif_results + static_results[:remaining_needed]
+            
+            print(f"Total results for {exercise_name}: {len(combined_results)} ({len(gif_results)} animated, {len(static_results)} static)")
+            return combined_results[:max_results]
+            
+    except Exception as e:
+        print(f"Image search error for {exercise_name}: {e}")
+        return []
 
-// Enhanced chat message class with exercise images
-class _ChatMessage {
-  final String text;
-  final bool isUser;
-  final DateTime timestamp;
-  final Map<String, List<ExerciseImage>> exerciseImages;
-
-  _ChatMessage({
-    required this.text,
-    required this.isUser,
-    DateTime? timestamp,
-    this.exerciseImages = const {},
-  }) : timestamp = timestamp ?? DateTime.now();
-
-  Map<String, dynamic> toFirestore() {
-    return {
-      'text': text,
-      'isUser': isUser,
-      'timestamp': Timestamp.fromDate(timestamp),
-      'exerciseImages': exerciseImages.map(
-        (key, value) => MapEntry(
-          key,
-          value.map((img) => img.toJson()).toList(),
-        ),
-      ),
-    };
-  }
-
-  factory _ChatMessage.fromFirestore(Map<String, dynamic> data) {
-    Map<String, List<ExerciseImage>> images = {};
+def should_include_images(user_message, ai_response):
+    """
+    Determine if the content warrants exercise images based on context
+    """
+    combined_text = f"{user_message} {ai_response}".lower()
     
-    if (data['exerciseImages'] != null) {
-      final imagesData = data['exerciseImages'] as Map<String, dynamic>;
-      images = imagesData.map((key, value) {
-        final imageList = (value as List).map((img) => 
-          ExerciseImage.fromJson(img as Map<String, dynamic>)
-        ).toList();
-        return MapEntry(key, imageList);
-      });
-    }
+    # Check for fitness-related indicators
+    fitness_related = any(indicator in combined_text for indicator in FITNESS_INDICATORS)
+    
+    # Check for instructional language that suggests demonstrations would be helpful
+    instructional_phrases = [
+        'how to', 'technique', 'form', 'proper', 'correct', 'demonstration',
+        'perform', 'execute', 'do this', 'steps', 'position', 'posture'
+    ]
+    
+    instructional = any(phrase in combined_text for phrase in instructional_phrases)
+    
+    return fitness_related and (instructional or 'workout' in combined_text or 'exercise' in combined_text)
 
-    return _ChatMessage(
-      text: data['text'] ?? '',
-      isUser: data['isUser'] ?? false,
-      timestamp: (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      exerciseImages: images,
-    );
-  }
-}
+def extract_exercises_from_text(text):
+    """
+    Intelligently extract exercise/movement names from AI response text using NLP techniques
+    """
+    import re
+    
+    # Common exercise patterns
+    exercise_patterns = [
+        # Pattern 1: **Exercise Name**: description
+        r'\*\*([^*]+)\*\*:',
+        # Pattern 2: 1. Exercise Name - description  
+        r'\d+\.\s*([^-\n]+)(?:\s*[-–]|\n)',
+        # Pattern 3: Exercise Name (standalone with context)
+        r'(?:perform|do|try|practice|start with|include)\s+([^,.!?\n]+?)(?:\s+(?:exercise|stretch|movement|pose))?(?:[,.!?\n]|$)',
+        # Pattern 4: "the [exercise name]" pattern
+        r'the\s+([^,.!?\n]{2,30}?)(?:\s+(?:exercise|stretch|movement|pose|position))',
+    ]
+    
+    found_exercises = []
+    
+    for pattern in exercise_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            exercise_name = match.group(1).strip()
+            
+            # Clean up the extracted name
+            exercise_name = re.sub(r'^(a|an|the)\s+', '', exercise_name, flags=re.IGNORECASE)
+            exercise_name = re.sub(r'\s+', ' ', exercise_name)
+            
+            # Validate it's likely an exercise/stretch
+            if _is_valid_exercise_name(exercise_name):
+                found_exercises.append(exercise_name)
+    
+    # Remove duplicates while preserving order
+    unique_exercises = []
+    seen = set()
+    for exercise in found_exercises:
+        lower_exercise = exercise.lower()
+        if lower_exercise not in seen and len(lower_exercise) > 2:
+            seen.add(lower_exercise)
+            unique_exercises.append(exercise)
+    
+    return unique_exercises[:5]  # Limit to 5 to avoid too many API calls
 
-class ConsultationPage extends StatefulWidget {
-  const ConsultationPage({super.key});
+def _is_valid_exercise_name(name):
+    """
+    Validate if extracted text is likely an exercise name
+    """
+    if not name or len(name) < 3 or len(name) > 50:
+        return False
+    
+    # Skip if it's just common words
+    common_words = {'and', 'or', 'but', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'would', 'should', 'could'}
+    words = name.lower().split()
+    if all(word in common_words for word in words):
+        return False
+    
+    # Check if it contains fitness-related terms or action words
+    fitness_terms = FITNESS_INDICATORS + [
+        'push', 'pull', 'lift', 'raise', 'lower', 'bend', 'twist', 'rotate', 'hold',
+        'press', 'curl', 'extension', 'flexion', 'crunch', 'raise', 'fly', 'row',
+        'squat', 'lunge', 'plank', 'bridge', 'twist', 'stretch', 'reach'
+    ]
+    
+    name_lower = name.lower()
+    has_fitness_term = any(term in name_lower for term in fitness_terms)
+    
+    # Also check for common exercise naming patterns
+    exercise_patterns = [
+        r'\w+\s+(press|curl|raise|extension|stretch|pose)',
+        r'(morning|evening|daily|basic|simple|easy)\s+\w+',
+        r'\w+\s+(workout|routine|exercise)',
+        r'(bicep|tricep|chest|back|shoulder|leg|core|ab)\s+\w+',
+    ]
+    
+    has_pattern = any(re.search(pattern, name_lower) for pattern in exercise_patterns)
+    
+    return has_fitness_term or has_pattern
 
-  @override
-  State<ConsultationPage> createState() => _ConsultationPageState();
-}
+def search_fitness_info(query, max_results=5):
+    """
+    Search for fitness-related information using DuckDuckGo
+    """
+    try:
+        with DDGS() as ddgs:
+            # Search for relevant fitness information
+            search_results = list(ddgs.text(
+                keywords=f"fitness health {query}",
+                max_results=max_results,
+                safesearch='moderate',
+                timelimit='y'  # Last year for recent information
+            ))
 
-class _ConsultationPageState extends State<ConsultationPage> {
-  final TextEditingController _controller = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  final List<_ChatMessage> _messages = [];
-  bool _isLoading = false;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+            # Format search results into readable context
+            context = []
+            for i, result in enumerate(search_results, 1):
+                context.append(f"""
+Source {i}:
+Title: {result.get('title', 'N/A')}
+URL: {result.get('href', 'N/A')}
+Content: {result.get('body', 'N/A')[:300]}...
+""")
 
-  @override
-  void initState() {
-    super.initState();
-    _loadChatHistory();
-  }
+            return "\n".join(context) if context else "No relevant search results found."
 
-  // Load previous chat messages from Firestore
-  Future<void> _loadChatHistory() async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) return;
+    except Exception as e:
+        print(f"Search error: {e}")
+        return f"Search unavailable: {str(e)}"
 
-      final querySnapshot = await _firestore
-          .collection('chats')
-          .doc(user.uid)
-          .collection('messages')
-          .orderBy('timestamp', descending: false)
-          .get();
+def should_search(user_message):
+    """
+    Determine if the user message requires current information search
+    """
+    search_keywords = [
+        'latest', 'recent', 'new', 'current', 'trending', 'update',
+        'studies show', 'research', 'news', 'breakthrough', '2024', '2025',
+        'what do experts say', 'current recommendations', 'search the web', 'search', 'more information'
+    ]
 
-      final loadedMessages = querySnapshot.docs.map((doc) {
-        return _ChatMessage.fromFirestore(doc.data());
-      }).toList();
+    message_lower = user_message.lower()
+    return any(keyword in message_lower for keyword in search_keywords)
 
-      setState(() {
-        _messages.addAll(loadedMessages);
-      });
+@app.route("/fitness-trainer", methods=["POST"])
+def fitness_trainer():
+    try:
+        data = request.get_json()
+        user_message = data.get("message", "")
+        enable_search = data.get("enable_search", True)
+        include_images = data.get("include_images", True)  # New parameter for image search
 
-      _scrollToBottom();
-    } catch (e) {
-      print('Error loading chat history: $e');
-    }
-  }
+        if not user_message:
+            return jsonify({"error": "Message is required"}), 400
 
-  // Save a message to Firestore
-  Future<void> _saveMessageToFirestore(_ChatMessage message) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) return;
+        # Determine if search is needed
+        search_context = ""
+        search_used = False
 
-      await _firestore
-          .collection('chats')
-          .doc(user.uid)
-          .collection('messages')
-          .add(message.toFirestore());
-    } catch (e) {
-      print('Error saving message: $e');
-    }
-  }
+        if enable_search and should_search(user_message):
+            print(f"Searching for: {user_message}")
+            search_context = search_fitness_info(user_message)
+            search_used = True
 
-  @override
-  Future<void> sendMessage(String prompt) async {
-    // Trim whitespace and check if the prompt is actually meaningful
-    final trimmedPrompt = prompt.trim();
-    if (trimmedPrompt.isEmpty) {
-      return; // Don't send empty or whitespace-only messages
-    }
+        # Enhanced system prompt with image integration
+        system_prompt = """You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance to users on their wellness journey. Your role is to motivate, educate, and assist users in achieving their fitness and health goals safely and effectively.
 
-    final data = {
-      "message": trimmedPrompt,
-      "include_images": true, // Enable image search
-    };
+When providing workout recommendations or exercise instructions, please format your response to clearly list exercises with their descriptions. Use clear exercise names that can be easily identified for image search integration.
 
-    try {
-      final response = await http
-          .post(
-            Uri.parse("https://web-production-54d1f.up.railway.app/fitness-trainer"),
-            headers: {"Content-Type": "application/json"},
-            body: json.encode(data),
-          )
-          .timeout(const Duration(seconds: 60));
+CORE PRINCIPLES:
+[Same as before - Safety First, Evidence-Based Approach, RAG Integration]
 
-      if (response.statusCode == 200) {
-        final responseData = json.decode(response.body);
+Format exercises clearly like:
+**Exercise Name**: Description of the exercise and technique.
 
-        // Extract the AI reply from the response
-        String responseText = "";
-        Map<String, List<ExerciseImage>> exerciseImages = {};
+IMPORTANT LIMITATIONS AND BOUNDARIES:
+[Same as before]
 
-        if (responseData is Map<String, dynamic>) {
-          responseText = responseData["ai_reply"]?.toString() ?? "No AI response received";
-          
-          // Parse exercise images
-          if (responseData["exercise_images"] != null) {
-            final imagesData = responseData["exercise_images"] as Map<String, dynamic>;
-            exerciseImages = imagesData.map((exerciseName, imageList) {
-              final images = (imageList as List).map((img) =>
-                ExerciseImage.fromJson(img as Map<String, dynamic>)
-              ).toList();
-              return MapEntry(exerciseName, images);
-            });
-          }
-        } else {
-          responseText = "Invalid response format";
+When answering, keep responses concise (under 5 bullet points or 150 words). Do not cut off mid-sentence."""
+
+        # Build messages array
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add search context if available
+        if search_context and search_used:
+            messages.append({
+                "role": "system",
+                "content": f"CURRENT SEARCH RESULTS (Use this information to enhance your response):\n{search_context}\n\nPlease incorporate relevant information from these search results while maintaining your evidence-based approach."
+            })
+
+        messages.append({"role": "user", "content": user_message})
+
+        # Payload to OpenRouter
+        payload = {
+            "model": MODEL,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 1000
         }
 
-        final aiMessage = _ChatMessage(
-          text: responseText,
-          isUser: false,
-          exerciseImages: exerciseImages,
-        );
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}"
+        }
 
-        setState(() {
-          _isLoading = false;
-          _messages.add(aiMessage);
-        });
+        response = requests.post(OPENROUTER_URL, headers=headers, json=payload)
 
-        // Save AI response to Firestore
-        await _saveMessageToFirestore(aiMessage);
+        if response.status_code != 200:
+            return jsonify({
+                "error": "Failed to connect to OpenRouter",
+                "details": response.text,
+                "status_code": response.status_code
+            }), 500
 
-        _scrollToBottom();
-      } else {
-        final errorMessage = _ChatMessage(
-          text: "Error: ${response.statusCode} ${response.reasonPhrase}",
-          isUser: false,
-        );
+        result = response.json()
 
-        setState(() {
-          _isLoading = false;
-          _messages.add(errorMessage);
-        });
+        if "choices" not in result or not result["choices"]:
+            return jsonify({
+                "error": "Invalid response from OpenRouter",
+                "details": result
+            }), 500
 
-        await _saveMessageToFirestore(errorMessage);
-        _scrollToBottom();
-      }
-    } catch (e) {
-      final errorMessage = _ChatMessage(text: "Error: $e", isUser: false);
+        reply = result["choices"][0]["message"]["content"]
 
-      setState(() {
-        _isLoading = false;
-        _messages.add(errorMessage);
-      });
+        # NEW: Extract exercises and search for images (only if content warrants it)
+        exercise_images = {}
+        if include_images and should_include_images(user_message, reply):
+            detected_exercises = extract_exercises_from_text(reply)
+            print(f"Detected exercises: {detected_exercises}")
+            
+            for exercise in detected_exercises[:3]:  # Limit to 3 exercises to avoid too many API calls
+                images = search_exercise_images(exercise, max_results=2)
+                if images:
+                    exercise_images[exercise] = images
+                    print(f"Found {len(images)} images for {exercise}")
 
-      await _saveMessageToFirestore(errorMessage);
-      _scrollToBottom();
-    }
-  }
+        return jsonify({
+            "user_message": user_message,
+            "ai_reply": reply,
+            "exercise_images": exercise_images,  # NEW: Include exercise images
+            "search_used": search_used,
+            "timestamp": datetime.now().isoformat(),
+            "model_used": MODEL
+        })
 
-  void _scrollToBottom() {
-    // Scrolls down to the latest message after a short delay
-    // to allow the UI to build the new message.
-    Timer(const Duration(milliseconds: 100), () {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__
+        }), 500
 
-  void _handleSend(String text) async {
-    // Trim whitespace and check if there's actual content
-    final trimmedText = text.trim();
-    if (trimmedText.isEmpty) {
-      return; // Don't send empty messages
-    }
+@app.route("/get-exercise-images", methods=["POST"])
+def get_exercise_images():
+    """
+    Dedicated endpoint for fetching exercise images
+    """
+    try:
+        data = request.get_json()
+        exercise_name = data.get("exercise", "")
+        max_results = data.get("max_results", 3)
 
-    // Prevent multiple simultaneous requests
-    if (_isLoading) {
-      return;
-    }
+        if not exercise_name:
+            return jsonify({"error": "Exercise name is required"}), 400
 
-    final userMessage = _ChatMessage(text: trimmedText, isUser: true);
+        images = search_exercise_images(exercise_name, max_results)
 
-    setState(() {
-      _messages.add(userMessage);
-      _controller.clear();
-      _isLoading = true;
-    });
+        return jsonify({
+            "exercise": exercise_name,
+            "images": images,
+            "count": len(images),
+            "timestamp": datetime.now().isoformat()
+        })
 
-    // Save user message to Firestore
-    await _saveMessageToFirestore(userMessage);
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    _scrollToBottom();
+@app.route("/search", methods=["POST"])
+def manual_search():
+    """
+    Manual search endpoint for testing DuckDuckGo integration
+    """
+    try:
+        data = request.get_json()
+        query = data.get("query", "")
 
-    // Send message to external AI service
-    sendMessage(trimmedText);
-  }
+        if not query:
+            return jsonify({"error": "Query is required"}), 400
 
-  void _showImageDialog(ExerciseImage image) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                  child: CachedNetworkImage(
-                    imageUrl: image.url,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => const Center(
-                      child: CircularProgressIndicator(),
-                    ),
-                    errorWidget: (context, url, error) => Container(
-                      height: 200,
-                      color: Colors.grey[300],
-                      child: const Icon(Icons.error, size: 50),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      Text(
-                        image.title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Source: ${image.source}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 16),
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Close'),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
+        search_results = search_fitness_info(query)
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text(
-          "AI Consultation",
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'CrimsonText',
-          ),
-        ),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        foregroundColor: Theme.of(context).colorScheme.onPrimary,
-        elevation: 1,
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16.0),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                return _buildMessageBubble(message);
-              },
-            ),
-          ),
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8.0),
-              child: LinearProgressIndicator(),
-            ),
-          _buildTextComposer(),
+        return jsonify({
+            "query": query,
+            "search_results": search_results,
+            "timestamp": datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({
+        "message": "AI Fitness Trainer API with RAG and Image Search is running",
+        "features": [
+            "Fitness training advice",
+            "DuckDuckGo search integration",
+            "Exercise image search and display",
+            "Real-time information retrieval",
+            "Evidence-based recommendations"
         ],
-      ),
-    );
-  }
+        "endpoints": {
+            "/fitness-trainer": "POST - Main fitness trainer endpoint with image search",
+            "/get-exercise-images": "POST - Get images for specific exercises",
+            "/search": "POST - Manual search testing",
+            "/": "GET - API status"
+        }
+    })
 
-  Widget _buildMessageBubble(_ChatMessage message) {
-    final bubbleAlignment = message.isUser
-        ? CrossAxisAlignment.end
-        : CrossAxisAlignment.start;
-    final bubbleColor = message.isUser
-        ? Theme.of(context).colorScheme.primary
-        : Theme.of(context).colorScheme.secondaryContainer;
-    final textColor = message.isUser
-        ? Theme.of(context).colorScheme.onPrimary
-        : Theme.of(context).colorScheme.onSecondaryContainer;
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    try:
+        # Test search functionality
+        test_search = search_fitness_info("fitness", max_results=1)
+        search_working = "No relevant search results found." not in test_search
+        
+        # Test image search
+        test_images = search_exercise_images("push-ups", max_results=1)
+        images_working = len(test_images) > 0
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 5.0),
-      child: Column(
-        crossAxisAlignment: bubbleAlignment,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 14.0,
-              vertical: 10.0,
-            ),
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.75,
-            ),
-            decoration: BoxDecoration(
-              color: bubbleColor,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  message.text,
-                  style: TextStyle(fontFamily: 'CrimsonText', color: textColor),
-                ),
-                // Display exercise images if available
-                if (message.exerciseImages.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  ...message.exerciseImages.entries.map((entry) =>
-                    _buildExerciseImageSection(entry.key, entry.value, textColor)
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+        return jsonify({
+            "status": "healthy",
+            "search_enabled": search_working,
+            "image_search_enabled": images_working,
+            "model": MODEL,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "degraded",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 503
 
-  Widget _buildExerciseImageSection(String exerciseName, List<ExerciseImage> images, Color textColor) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          exerciseName.toUpperCase(),
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-            color: textColor.withOpacity(0.8),
-            fontFamily: 'CrimsonText',
-          ),
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: 120,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: images.length,
-            itemBuilder: (context, index) {
-              final image = images[index];
-              return Container(
-                margin: const EdgeInsets.only(right: 8),
-                child: GestureDetector(
-                  onTap: () => _showImageDialog(image),
-                  child: Container(
-                    width: 120,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: image.isAnimated 
-                            ? Colors.orange.withOpacity(0.6)  // Orange border for GIFs
-                            : textColor.withOpacity(0.3),
-                        width: image.isAnimated ? 2 : 1,
-                      ),
-                    ),
-                    child: Stack(
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: CachedNetworkImage(
-                            imageUrl: image.url,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) => Container(
-                              color: Colors.grey[300],
-                              child: Center(
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          image.isAnimated ? Colors.orange : Colors.grey,
-                                        ),
-                                      ),
-                                    ),
-                                    if (image.isAnimated) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'GIF',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.orange[700],
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              color: Colors.grey[300],
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    image.isAnimated ? Icons.gif : Icons.fitness_center, 
-                                    color: Colors.grey[600], 
-                                    size: 24
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    exerciseName.split(' ').first,
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.grey[600],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        // GIF indicator badge
-                        if (image.isAnimated)
-                          Positioned(
-                            top: 4,
-                            right: 4,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.orange,
-                                borderRadius: BorderRadius.circular(8),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.3),
-                                    blurRadius: 2,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                              child: const Text(
-                                'GIF',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 8,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 8),
-      ],
-    );
-  }
+if __name__ == "__main__":
+    # Test search on startup
+    try:
+        test_result = search_fitness_info("fitness test", max_results=1)
+        print("✅ DuckDuckGo text search is working")
+        print(f"Test result: {test_result[:100]}...")
+        
+        # Test image search
+        test_images = search_exercise_images("push-ups", max_results=1)
+        print(f"✅ DuckDuckGo image search is working - Found {len(test_images)} images")
+        
+    except Exception as e:
+        print(f"⚠️ DuckDuckGo search test failed: {e}")
 
-  Widget _buildTextComposer() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        boxShadow: [
-          BoxShadow(
-            offset: const Offset(0, -1),
-            blurRadius: 2.0,
-            color: Colors.black.withOpacity(0.05),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              onSubmitted: (value) {
-                _handleSend(value);
-              },
-              decoration: const InputDecoration(
-                hintText: "Ask me anything fitness!",
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.all(8.0),
-              ),
-              style: const TextStyle(fontFamily: 'CrimsonText'),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send),
-            onPressed: () {
-              _handleSend(_controller.text);
-            },
-            color: Theme.of(context).colorScheme.primary,
-          ),
-        ],
-      ),
-    );
-  }
-}
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
