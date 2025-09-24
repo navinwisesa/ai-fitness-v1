@@ -259,7 +259,7 @@ def estimate_workout_duration(exercises):
     exercise_time = len(exercises) * 8
     return min(base_time + exercise_time, 120)
 def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
-    """Enhanced search for exercise demonstration images/GIFs"""
+    """Enhanced search for exercise demonstration images/GIFs with static fallback"""
     try:
         with DDGS() as ddgs:
             all_results = []
@@ -270,7 +270,9 @@ def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
                 f"{exercise_name} workout technique gif",
                 f"how to do {exercise_name} animated",
                 f"{exercise_name} proper form demonstration",
-                f"{exercise_name} exercise tutorial"
+                f"{exercise_name} exercise tutorial",
+                f"{exercise_name} fitness exercise",  # Broader search
+                f"{exercise_name} workout",  # Even broader
             ]
             
             for query in search_queries:
@@ -280,7 +282,7 @@ def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
                 try:
                     search_results = list(ddgs.images(
                         keywords=query,
-                        max_results=max_results,
+                        max_results=max_results + 2,  # Get more to filter
                         safesearch='moderate',
                         size='Medium'
                     ))
@@ -290,11 +292,20 @@ def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
                             url = img['image'].lower()
                             title = img['title'].lower()
                             
-                            # Better detection for exercise-related content
+                            # Much broader exercise detection
                             is_exercise_related = (
-                                any(term in title for term in ['exercise', 'workout', 'fitness', 'training']) or
-                                any(term in url for term in ['exercise', 'workout', 'fitness'])
+                                any(term in title for term in [
+                                    'exercise', 'workout', 'fitness', 'training', 
+                                    'gym', 'body', 'muscle', 'health', 'sport',
+                                    'demonstration', 'tutorial', 'how to', 'technique'
+                                ]) or
+                                any(term in url for term in ['exercise', 'workout', 'fitness', 'gym'])
+                                or 'exercise' in query  # If we searched for exercise, assume it's related
                             )
+                            
+                            # Accept ANY image if it's from an exercise search
+                            if not is_exercise_related and 'exercise' in query.lower():
+                                is_exercise_related = True
                             
                             is_animated = (
                                 url.endswith('.gif') or 
@@ -303,8 +314,8 @@ def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
                                 'animated' in title
                             )
                             
-                            # Prioritize animated if requested, but include static if needed
-                            if is_exercise_related and (is_animated or not prefer_animated or len(all_results) < max_results):
+                            # Always include if it's exercise-related, regardless of animation
+                            if is_exercise_related:
                                 all_results.append({
                                     'url': img['image'],
                                     'title': img['title'],
@@ -319,6 +330,32 @@ def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
                     print(f"Query '{query}' failed: {query_error}")
                     continue
             
+            # If no results found, try a much broader search
+            if not all_results:
+                print(f"No results found for {exercise_name}, trying broader search...")
+                try:
+                    # Last resort: very broad search
+                    broad_results = list(ddgs.images(
+                        keywords=exercise_name,
+                        max_results=max_results,
+                        safesearch='moderate',
+                        size='Medium'
+                    ))
+                    
+                    for img in broad_results:
+                        if img.get('image') and img.get('title'):
+                            all_results.append({
+                                'url': img['image'],
+                                'title': img['title'],
+                                'source': img.get('source', ''),
+                                'width': img.get('width', 0),
+                                'height': img.get('height', 0),
+                                'type': 'static',  # Assume static for broad search
+                                'exercise_match_score': 1  # Minimum score
+                            })
+                except Exception as broad_error:
+                    print(f"Broad search also failed: {broad_error}")
+            
             # Sort by relevance and remove duplicates
             unique_results = _remove_duplicate_images(all_results)
             sorted_results = sorted(unique_results, 
@@ -329,7 +366,8 @@ def search_exercise_images(exercise_name, max_results=3, prefer_animated=True):
             
     except Exception as e:
         print(f"Image search error for {exercise_name}: {e}")
-        return []
+        # Return placeholder images as fallback
+        return _get_placeholder_images(exercise_name, max_results)
 
 def _calculate_exercise_match_score(exercise_name, image_title):
     """Calculate how well the image title matches the exercise name"""
