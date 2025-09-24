@@ -209,16 +209,22 @@ def determine_primary_category(exercises):
     if not exercises:
         return 'other'
     
-    # Assuming 'exercises' is a list of Exercise objects
-    categories = [ex.category for ex in exercises]
+    categories = []
+    for ex in exercises:
+        # Check if the object is a dictionary and has a 'category' key
+        if isinstance(ex, dict) and 'category' in ex:
+            categories.append(ex['category'])
+        # Check if the object is an instance of a class with a 'category' attribute
+        elif hasattr(ex, 'category'):
+            categories.append(ex.category)
+    
+    if not categories:
+        return 'other'
+        
     category_counts = {}
     for cat in categories:
         category_counts[cat] = category_counts.get(cat, 0) + 1
     
-    # Find the most frequent category
-    if not category_counts:
-        return 'other'
-        
     return max(category_counts.items(), key=lambda x: x[1])[0]
 
 def estimate_workout_duration(exercises):
