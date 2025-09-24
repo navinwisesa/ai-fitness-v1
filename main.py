@@ -39,69 +39,69 @@ def generate_workout_colors():
 
 def parse_workout_plan_from_text(ai_response):
     """
-    Enhanced parser to extract structured workout plans from AI responses
+    Fixed parser to extract structured workout plans that work with the calendar
     """
     workouts = []
-    day_pattern = r'(?:Day\s+(\d+)|(\w+day))\s*[:-]?\s*([^\n]+?)(?:\n|$)'
-    day_matches = re.finditer(day_pattern, ai_response, re.IGNORECASE | re.MULTILINE)
     
-    for match in day_matches:
-        day_num = match.group(1)
-        day_name = match.group(2)
-        exercises_text = match.group(3)
-        if day_num:
-            day_number = int(day_num)
-        elif day_name:
-            day_mapping = {
-                'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4,
-                'friday': 5, 'saturday': 6, 'sunday': 7
-            }
-            day_number = day_mapping.get(day_name.lower(), 1)
-        else:
-            day_number = 1
-        exercises = extract_exercises_from_day_text(exercises_text)
-        
-        if exercises:
-            workout = {
-                'day': day_number,
-                'name': f"Day {day_number} Workout",
-                'exercises': exercises,
-                'duration': estimate_workout_duration(exercises),
-                'category': determine_primary_category(exercises),
-                'color': generate_workout_colors()
-            }
-            workouts.append(workout)
-    if not workouts:
-        workouts = parse_weekly_schedule_format(ai_response)
-    if not workouts:
-        all_exercises = extract_exercises_from_text(ai_response)
-        if all_exercises:
-            workout = {
-                'day': 1,
-                'name': "Custom Workout",
-                'exercises': all_exercises,
-                'duration': estimate_workout_duration(all_exercises),
-                'category': determine_primary_category(all_exercises),
-                'color': generate_workout_colors()
-            }
-            workouts.append(workout)
+    # Look for clear day indicators
+    day_patterns = [
+        r'Day\s+(\d+)[:\-]\s*(.*?)(?=(?:\n\s*Day\s+\d+|\n\s*\w+day|\Z))',
+        r'(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)[:\-]\s*(.*?)(?=(?:\n\s*(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day|\n\s*Day\s+\d+|\Z))',
+    ]
+    
+    for pattern in day_patterns:
+        matches = re.finditer(pattern, ai_response, re.IGNORECASE | re.DOTALL)
+        for match in matches:
+            day_num = match.group(1) if pattern.startswith('Day') else None
+            day_name = match.group(1) if not pattern.startswith('Day') else None
+            day_content = match.group(2)
+            
+            if day_num:
+                day_number = int(day_num)
+            elif day_name:
+                day_mapping = {
+                    'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4,
+                    'friday': 5, 'saturday': 6, 'sunday': 7
+                }
+                day_number = day_mapping.get(day_name.lower(), 1)
+            else:
+                continue
+                
+            exercises = extract_exercises_from_day_text(day_content)
+            
+            if exercises:
+                workout = {
+                    'day': day_number,
+                    'name': f"Day {day_number} Workout",
+                    'exercises': exercises,
+                    'duration': estimate_workout_duration(exercises),
+                    'category': determine_primary_category(exercises),
+                }
+                workouts.append(workout)
     
     return workouts
 
 def extract_exercises_from_day_text(day_text):
-    """Extract individual exercises from a day's workout text"""
+    """Simple but reliable exercise extraction"""
     exercises = []
-    patterns = [
-        r'(?:^|\n)\s*[-•*]\s*([^:\n]+?)(?:\s*[-–:]\s*(.+?))?(?:\n|$)',
-        r'(?:^|\n)\s*\d+\.\s*([^:\n]+?)(?:\s*[-–:]\s*(.+?))?(?:\n|$)',
-        r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*[-–:]\s*([^.\n]+)',
-    ]
     
-    for pattern in patterns:
-        matches = re.finditer(pattern, day_text, re.MULTILINE)
-        for match in matches:
-            exercise_name = match.group(1).strip()
-            details = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else ""
+    # Look for exercise lines with common patterns
+    lines = day_text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith(('Rest', 'Day off', 'Recovery')):
+            continue
+            
+        # Pattern: "- Exercise: 3x12" or "• Bench Press: 3 sets x 12 reps"
+        exercise_match = re.search(r'[•\-]\s*([^:]+?)\s*:\s*(.+)', line)
+        if not exercise_match:
+            # Pattern: "Bench Press - 3x12"
+            exercise_match = re.search(r'([^\-]+?)\s*-\s*(.+)', line)
+        
+        if exercise_match:
+            exercise_name = exercise_match.group(1).strip()
+            details = exercise_match.group(2).strip()
             
             if _is_valid_exercise_name(exercise_name):
                 sets, reps, weight = parse_exercise_details(details)
