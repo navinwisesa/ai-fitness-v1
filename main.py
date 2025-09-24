@@ -3,19 +3,16 @@ import requests
 import os
 from duckduckgo_search import DDGS
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
+import random
 
 app = Flask(__name__)
-
-# Environment variables for API keys
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
                                "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")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "meta-llama/llama-3.3-70b-instruct:free"
-
-# Fitness-related terms that indicate image-worthy content
 FITNESS_INDICATORS = [
     'exercise', 'workout', 'stretch', 'movement', 'pose', 'position', 'form',
     'technique', 'drill', 'routine', 'training', 'bicep', 'tricep', 'chest',
@@ -24,29 +21,224 @@ FITNESS_INDICATORS = [
     'dumbbell', 'barbell', 'kettlebell', 'resistance', 'band', 'machine'
 ]
 
+def generate_workout_colors():
+    """Generate random colors for workouts"""
+    colors = [
+        0xFF2196F3,
+        0xFF4CAF50,
+        0xFFFF9800,
+        0xFF9C27B0,
+        0xFFF44336,
+        0xFF00BCD4,
+        0xFF8BC34A,
+        0xFFFF5722,
+        0xFF673AB7,
+        0xFF607D8B,
+    ]
+    return random.choice(colors)
+
+def parse_workout_plan_from_text(ai_response):
+    """
+    Enhanced parser to extract structured workout plans from AI responses
+    """
+    workouts = []
+    day_pattern = r'(?:Day\s+(\d+)|(\w+day))\s*[:-]?\s*([^\n]+?)(?:\n|$)'
+    day_matches = re.finditer(day_pattern, ai_response, re.IGNORECASE | re.MULTILINE)
+    
+    for match in day_matches:
+        day_num = match.group(1)
+        day_name = match.group(2)
+        exercises_text = match.group(3)
+        if day_num:
+            day_number = int(day_num)
+        elif day_name:
+            day_mapping = {
+                'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4,
+                'friday': 5, 'saturday': 6, 'sunday': 7
+            }
+            day_number = day_mapping.get(day_name.lower(), 1)
+        else:
+            day_number = 1
+        exercises = extract_exercises_from_day_text(exercises_text)
+        
+        if exercises:
+            workout = {
+                'day': day_number,
+                'name': f"Day {day_number} Workout",
+                'exercises': exercises,
+                'duration': estimate_workout_duration(exercises),
+                'category': determine_primary_category(exercises),
+                'color': generate_workout_colors()
+            }
+            workouts.append(workout)
+    if not workouts:
+        workouts = parse_weekly_schedule_format(ai_response)
+    if not workouts:
+        all_exercises = extract_exercises_from_text(ai_response)
+        if all_exercises:
+            workout = {
+                'day': 1,
+                'name': "Custom Workout",
+                'exercises': all_exercises,
+                'duration': estimate_workout_duration(all_exercises),
+                'category': determine_primary_category(all_exercises),
+                'color': generate_workout_colors()
+            }
+            workouts.append(workout)
+    
+    return workouts
+
+def extract_exercises_from_day_text(day_text):
+    """Extract individual exercises from a day's workout text"""
+    exercises = []
+    patterns = [
+        r'(?:^|\n)\s*[-•*]\s*([^:\n]+?)(?:\s*[-–:]\s*(.+?))?(?:\n|$)',
+        r'(?:^|\n)\s*\d+\.\s*([^:\n]+?)(?:\s*[-–:]\s*(.+?))?(?:\n|$)',
+        r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*[-–:]\s*([^.\n]+)',
+    ]
+    
+    for pattern in patterns:
+        matches = re.finditer(pattern, day_text, re.MULTILINE)
+        for match in matches:
+            exercise_name = match.group(1).strip()
+            details = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else ""
+            
+            if _is_valid_exercise_name(exercise_name):
+                sets, reps, weight = parse_exercise_details(details)
+                
+                exercise = {
+                    'name': exercise_name,
+                    'sets': sets,
+                    'reps': reps,
+                    'weight': weight,
+                    'category': categorize_exercise(exercise_name)
+                }
+                exercises.append(exercise)
+    
+    return exercises
+
+def parse_weekly_schedule_format(text):
+    """Parse weekly schedule format workout plans"""
+    workouts = []
+    weekly_indicators = r'(?:Week\s+\d+|Weekly\s+Schedule|7[- ]day\s+plan)'
+    if not re.search(weekly_indicators, text, re.IGNORECASE):
+        return []
+    day_sections = re.split(r'\n(?=(?:Day\s+\d+|\w+day))', text, flags=re.IGNORECASE)
+    
+    for section in day_sections:
+        if re.match(r'(?:Day\s+\d+|\w+day)', section, re.IGNORECASE):
+            exercises = extract_exercises_from_day_text(section)
+            if exercises:
+                day_match = re.match(r'(?:Day\s+(\d+)|(\w+day))', section, re.IGNORECASE)
+                if day_match:
+                    day_num = day_match.group(1)
+                    day_name = day_match.group(2)
+                    
+                    if day_num:
+                        day_number = int(day_num)
+                    else:
+                        day_mapping = {
+                            'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4,
+                            'friday': 5, 'saturday': 6, 'sunday': 7
+                        }
+                        day_number = day_mapping.get(day_name.lower(), len(workouts) + 1)
+                    
+                    workout = {
+                        'day': day_number,
+                        'name': f"Day {day_number} - {determine_primary_category(exercises).title()}",
+                        'exercises': exercises,
+                        'duration': estimate_workout_duration(exercises),
+                        'category': determine_primary_category(exercises),
+                        'color': generate_workout_colors()
+                    }
+                    workouts.append(workout)
+    
+    return workouts
+
+def parse_exercise_details(details_text):
+    """Parse sets, reps, and weight from exercise details"""
+    sets = 3
+    reps = 10
+    weight = 0.0
+    
+    if not details_text:
+        return sets, reps, weight
+    sets_match = re.search(r'(\d+)\s*(?:sets?|x)', details_text, re.IGNORECASE)
+    if sets_match:
+        sets = int(sets_match.group(1))
+    reps_match = re.search(r'(\d+)\s*(?:reps?|repetitions?)', details_text, re.IGNORECASE)
+    if not reps_match:
+        format_match = re.search(r'\d+\s*x\s*(\d+)', details_text, re.IGNORECASE)
+        if format_match:
+            reps = int(format_match.group(1))
+    else:
+        reps = int(reps_match.group(1))
+    weight_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:kg|lbs?|pounds?)', details_text, re.IGNORECASE)
+    if weight_match:
+        weight = float(weight_match.group(1))
+        if re.search(r'lbs?|pounds?', details_text, re.IGNORECASE):
+            weight = weight * 0.453592
+    
+    return sets, reps, weight
+
+def categorize_exercise(exercise_name):
+    """Categorize exercise based on name"""
+    exercise_lower = exercise_name.lower()
+    
+    if any(word in exercise_lower for word in ['press', 'push', 'chest', 'bench', 'fly', 'dip']):
+        return 'chest'
+    elif any(word in exercise_lower for word in ['curl', 'bicep', 'chin']):
+        return 'biceps'
+    elif any(word in exercise_lower for word in ['tricep', 'extension', 'dip']):
+        return 'triceps'
+    elif any(word in exercise_lower for word in ['row', 'pull', 'lat', 'back']):
+        return 'back'
+    elif any(word in exercise_lower for word in ['shoulder', 'lateral', 'overhead', 'military']):
+        return 'shoulders'
+    elif any(word in exercise_lower for word in ['squat', 'lunge', 'leg', 'quad', 'hamstring']):
+        return 'legs'
+    elif any(word in exercise_lower for word in ['plank', 'crunch', 'core', 'ab', 'sit']):
+        return 'core'
+    elif any(word in exercise_lower for word in ['run', 'jog', 'cardio', 'bike', 'treadmill']):
+        return 'cardio'
+    else:
+        return 'other'
+
+def determine_primary_category(exercises):
+    """Determine the primary category for a workout based on exercises"""
+    if not exercises:
+        return 'other'
+    
+    categories = [ex.get('category', 'other') for ex in exercises]
+    category_counts = {}
+    for cat in categories:
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+    
+    return max(category_counts.items(), key=lambda x: x[1])[0]
+
+def estimate_workout_duration(exercises):
+    """Estimate workout duration based on exercises"""
+    base_time = 15
+    exercise_time = len(exercises) * 8
+    return min(base_time + exercise_time, 120)
 def search_exercise_images(exercise_name, max_results=3):
-    """
-    Search for exercise demonstration images/GIFs using DuckDuckGo with priority on animated content
-    """
+    """Search for exercise demonstration images/GIFs using DuckDuckGo"""
     try:
         with DDGS() as ddgs:
-            # First attempt: Search specifically for GIFs and animated demonstrations
             gif_results = []
             try:
                 gif_search_results = list(ddgs.images(
                     keywords=f"{exercise_name} exercise demonstration gif animated how to",
-                    max_results=max_results * 2,  # Get more results to filter
+                    max_results=max_results * 2,
                     safesearch='moderate',
                     size='Medium'
                 ))
                 
-                # Filter for likely GIFs/animated content
                 for img in gif_search_results:
                     if img.get('image') and img.get('title'):
                         url = img['image'].lower()
                         title = img['title'].lower()
                         
-                        # Check if it's likely a GIF or animated content
                         is_animated = (
                             url.endswith('.gif') or 
                             '.gif' in url or
@@ -67,117 +259,49 @@ def search_exercise_images(exercise_name, max_results=3):
                                 'type': 'animated'
                             })
                 
-                print(f"Found {len(gif_results)} animated results for {exercise_name}")
+                if len(gif_results) >= max_results:
+                    return gif_results[:max_results]
                 
             except Exception as gif_error:
                 print(f"GIF search failed for {exercise_name}: {gif_error}")
             
-            # If we have enough GIFs, return them
-            if len(gif_results) >= max_results:
-                return gif_results[:max_results]
-            
-            # Second attempt: Search for regular demonstration images
-            static_results = []
-            remaining_needed = max_results - len(gif_results)
-            
-            if remaining_needed > 0:
-                try:
-                    static_search_results = list(ddgs.images(
-                        keywords=f"{exercise_name} exercise technique form proper demonstration",
-                        max_results=remaining_needed * 2,
-                        safesearch='moderate',
-                        size='Medium',
-                        type_image='photo'
-                    ))
-                    
-                    # Filter static images, avoiding duplicates from GIF search
-                    existing_urls = {img['url'] for img in gif_results}
-                    
-                    for img in static_search_results:
-                        if (img.get('image') and 
-                            img.get('title') and 
-                            img['image'] not in existing_urls):
-                            
-                            static_results.append({
-                                'url': img['image'],
-                                'title': img['title'],
-                                'source': img.get('source', ''),
-                                'width': img.get('width', 0),
-                                'height': img.get('height', 0),
-                                'type': 'static'
-                            })
-                            
-                            if len(static_results) >= remaining_needed:
-                                break
-                    
-                    print(f"Found {len(static_results)} static results for {exercise_name}")
-                    
-                except Exception as static_error:
-                    print(f"Static image search failed for {exercise_name}: {static_error}")
-            
-            # Combine results: GIFs first, then static images
-            combined_results = gif_results + static_results[:remaining_needed]
-            
-            print(f"Total results for {exercise_name}: {len(combined_results)} ({len(gif_results)} animated, {len(static_results)} static)")
-            return combined_results[:max_results]
+            return gif_results[:max_results]
             
     except Exception as e:
         print(f"Image search error for {exercise_name}: {e}")
         return []
 
 def should_include_images(user_message, ai_response):
-    """
-    Determine if the content warrants exercise images based on context
-    """
+    """Determine if content warrants exercise images"""
     combined_text = f"{user_message} {ai_response}".lower()
-    
-    # Check for fitness-related indicators
     fitness_related = any(indicator in combined_text for indicator in FITNESS_INDICATORS)
-    
-    # Check for instructional language that suggests demonstrations would be helpful
     instructional_phrases = [
         'how to', 'technique', 'form', 'proper', 'correct', 'demonstration',
         'perform', 'execute', 'do this', 'steps', 'position', 'posture'
     ]
-    
     instructional = any(phrase in combined_text for phrase in instructional_phrases)
-    
     return fitness_related and (instructional or 'workout' in combined_text or 'exercise' in combined_text)
 
 def extract_exercises_from_text(text):
-    """
-    Intelligently extract exercise/movement names from AI response text using NLP techniques
-    """
-    import re
-    
-    # Common exercise patterns
+    """Extract exercise names from text"""
     exercise_patterns = [
-        # Pattern 1: **Exercise Name**: description
         r'\*\*([^*]+)\*\*:',
-        # Pattern 2: 1. Exercise Name - description  
         r'\d+\.\s*([^-\n]+)(?:\s*[-–]|\n)',
-        # Pattern 3: Exercise Name (standalone with context)
         r'(?:perform|do|try|practice|start with|include)\s+([^,.!?\n]+?)(?:\s+(?:exercise|stretch|movement|pose))?(?:[,.!?\n]|$)',
-        # Pattern 4: "the [exercise name]" pattern
         r'the\s+([^,.!?\n]{2,30}?)(?:\s+(?:exercise|stretch|movement|pose|position))',
     ]
     
     found_exercises = []
-    
     for pattern in exercise_patterns:
         matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
         for match in matches:
             exercise_name = match.group(1).strip()
-            
-            # Clean up the extracted name
             exercise_name = re.sub(r'^(a|an|the)\s+', '', exercise_name, flags=re.IGNORECASE)
             exercise_name = re.sub(r'\s+', ' ', exercise_name)
             
-            # Validate it's likely an exercise/stretch
             if _is_valid_exercise_name(exercise_name):
                 found_exercises.append(exercise_name)
     
-    # Remove duplicates while preserving order
     unique_exercises = []
     seen = set()
     for exercise in found_exercises:
@@ -186,22 +310,18 @@ def extract_exercises_from_text(text):
             seen.add(lower_exercise)
             unique_exercises.append(exercise)
     
-    return unique_exercises[:5]  # Limit to 5 to avoid too many API calls
+    return unique_exercises[:5]
 
 def _is_valid_exercise_name(name):
-    """
-    Validate if extracted text is likely an exercise name
-    """
+    """Validate if extracted text is likely an exercise name"""
     if not name or len(name) < 3 or len(name) > 50:
         return False
     
-    # Skip if it's just common words
     common_words = {'and', 'or', 'but', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'would', 'should', 'could'}
     words = name.lower().split()
     if all(word in common_words for word in words):
         return False
     
-    # Check if it contains fitness-related terms or action words
     fitness_terms = FITNESS_INDICATORS + [
         'push', 'pull', 'lift', 'raise', 'lower', 'bend', 'twist', 'rotate', 'hold',
         'press', 'curl', 'extension', 'flexion', 'crunch', 'raise', 'fly', 'row',
@@ -211,7 +331,6 @@ def _is_valid_exercise_name(name):
     name_lower = name.lower()
     has_fitness_term = any(term in name_lower for term in fitness_terms)
     
-    # Also check for common exercise naming patterns
     exercise_patterns = [
         r'\w+\s+(press|curl|raise|extension|stretch|pose)',
         r'(morning|evening|daily|basic|simple|easy)\s+\w+',
@@ -220,24 +339,19 @@ def _is_valid_exercise_name(name):
     ]
     
     has_pattern = any(re.search(pattern, name_lower) for pattern in exercise_patterns)
-    
     return has_fitness_term or has_pattern
 
 def search_fitness_info(query, max_results=5):
-    """
-    Search for fitness-related information using DuckDuckGo
-    """
+    """Search for fitness information using DuckDuckGo"""
     try:
         with DDGS() as ddgs:
-            # Search for relevant fitness information
             search_results = list(ddgs.text(
                 keywords=f"fitness health {query}",
                 max_results=max_results,
                 safesearch='moderate',
-                timelimit='y'  # Last year for recent information
+                timelimit='y'
             ))
 
-            # Format search results into readable context
             context = []
             for i, result in enumerate(search_results, 1):
                 context.append(f"""
@@ -254,17 +368,25 @@ Content: {result.get('body', 'N/A')[:300]}...
         return f"Search unavailable: {str(e)}"
 
 def should_search(user_message):
-    """
-    Determine if the user message requires current information search
-    """
+    """Determine if user message requires current information search"""
     search_keywords = [
         'latest', 'recent', 'new', 'current', 'trending', 'update',
         'studies show', 'research', 'news', 'breakthrough', '2024', '2025',
         'what do experts say', 'current recommendations', 'search the web', 'search', 'more information'
     ]
-
     message_lower = user_message.lower()
     return any(keyword in message_lower for keyword in search_keywords)
+
+def should_create_workout_plan(user_message):
+    """Determine if the user is asking for a workout plan creation"""
+    plan_keywords = [
+        'create a plan', 'workout plan', 'training plan', 'exercise plan',
+        'schedule workout', 'plan my workout', 'weekly plan', 'workout schedule',
+        'training schedule', 'routine plan', 'fitness plan', 'add to calendar',
+        'create schedule', 'weekly routine', 'daily workout', 'workout calendar'
+    ]
+    message_lower = user_message.lower()
+    return any(keyword in message_lower for keyword in plan_keywords)
 
 @app.route("/fitness-trainer", methods=["POST"])
 def fitness_trainer():
@@ -272,12 +394,13 @@ def fitness_trainer():
         data = request.get_json()
         user_message = data.get("message", "")
         enable_search = data.get("enable_search", True)
-        include_images = data.get("include_images", True)  # New parameter for image search
+        include_images = data.get("include_images", True)
+        create_plan = data.get("create_plan", False)
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
-
-        # Determine if search is needed
+        if not create_plan:
+            create_plan = should_create_workout_plan(user_message)
         search_context = ""
         search_used = False
 
@@ -285,27 +408,34 @@ def fitness_trainer():
             print(f"Searching for: {user_message}")
             search_context = search_fitness_info(user_message)
             search_used = True
+        system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance to users on their wellness journey. Your role is to motivate, educate, and assist users in achieving their fitness and health goals safely and effectively.
 
-        # Enhanced system prompt with image integration
-        system_prompt = """You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance to users on their wellness journey. Your role is to motivate, educate, and assist users in achieving their fitness and health goals safely and effectively.
+{('SPECIAL INSTRUCTION: The user is asking for a workout plan. Please provide a structured workout plan that can be parsed and added to their calendar. Use clear day-by-day format like "Day 1: [workout name]" followed by exercises with sets and reps.' if create_plan else '')}
 
 When providing workout recommendations or exercise instructions, please format your response to clearly list exercises with their descriptions. Use clear exercise names that can be easily identified for image search integration.
 
 CORE PRINCIPLES:
-[Same as before - Safety First, Evidence-Based Approach, RAG Integration]
+- Safety First: Always prioritize proper form and injury prevention
+- Evidence-Based Approach: Base recommendations on established fitness science
+- Progressive Overload: Gradually increase difficulty over time
+- Individual Adaptation: Consider user's fitness level and goals
 
 Format exercises clearly like:
 **Exercise Name**: Description of the exercise and technique.
 
+For workout plans, use this structure:
+Day 1: [Focus Area]
+- Exercise 1: 3 sets x 12 reps
+- Exercise 2: 3 sets x 10 reps
+
 IMPORTANT LIMITATIONS AND BOUNDARIES:
-[Same as before]
+- Never provide medical diagnoses or treatment advice
+- Always recommend consulting healthcare professionals for injuries
+- Emphasize the importance of proper warm-up and cool-down
+- Suggest modifications for different fitness levels
 
-When answering, keep responses concise (under 5 bullet points or 150 words). Do not cut off mid-sentence."""
-
-        # Build messages array
+When answering, keep responses concise and actionable. If creating a workout plan, provide a clear day-by-day structure."""
         messages = [{"role": "system", "content": system_prompt}]
-
-        # Add search context if available
         if search_context and search_used:
             messages.append({
                 "role": "system",
@@ -313,13 +443,11 @@ When answering, keep responses concise (under 5 bullet points or 150 words). Do 
             })
 
         messages.append({"role": "user", "content": user_message})
-
-        # Payload to OpenRouter
         payload = {
             "model": MODEL,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 1000
+            "max_tokens": 1500
         }
 
         headers = {
@@ -345,14 +473,15 @@ When answering, keep responses concise (under 5 bullet points or 150 words). Do 
             }), 500
 
         reply = result["choices"][0]["message"]["content"]
-
-        # NEW: Extract exercises and search for images (only if content warrants it)
+        workout_plan = []
+        if create_plan:
+            workout_plan = parse_workout_plan_from_text(reply)
         exercise_images = {}
         if include_images and should_include_images(user_message, reply):
             detected_exercises = extract_exercises_from_text(reply)
             print(f"Detected exercises: {detected_exercises}")
             
-            for exercise in detected_exercises[:3]:  # Limit to 3 exercises to avoid too many API calls
+            for exercise in detected_exercises[:3]:
                 images = search_exercise_images(exercise, max_results=2)
                 if images:
                     exercise_images[exercise] = images
@@ -361,7 +490,9 @@ When answering, keep responses concise (under 5 bullet points or 150 words). Do 
         return jsonify({
             "user_message": user_message,
             "ai_reply": reply,
-            "exercise_images": exercise_images,  # NEW: Include exercise images
+            "exercise_images": exercise_images,
+            "workout_plan": workout_plan,
+            "plan_created": len(workout_plan) > 0,
             "search_used": search_used,
             "timestamp": datetime.now().isoformat(),
             "model_used": MODEL
@@ -373,11 +504,49 @@ When answering, keep responses concise (under 5 bullet points or 150 words). Do 
             "type": type(e).__name__
         }), 500
 
+@app.route("/create-workout-plan", methods=["POST"])
+def create_workout_plan():
+    """Dedicated endpoint for creating workout plans"""
+    try:
+        data = request.get_json()
+        plan_request = data.get("request", "")
+        user_preferences = data.get("preferences", {})
+        
+        if not plan_request:
+            return jsonify({"error": "Plan request is required"}), 400
+          
+        enhanced_ prompt = (
+    f'Create a detailed weekly workout plan based on this request: "{plan_request}"\n\n'
+    f'User preferences: {json.dumps(user_preferences)}\n\n'
+    "Please provide a structured 7-day workout plan using this format:\n\n"
+    "Day 1: [Workout Name/Focus]\n"
+    "- Exercise 1: 3 sets x 12 reps\n"
+    "- Exercise 2: 3 sets x 10 reps\n"
+    "- Exercise 3: 4 sets x 8 reps\n\n"
+    "Day 2: [Workout Name/Focus]\n"
+    "- Exercise 1: 3 sets x 15 reps\n"
+    "- Exercise 2: 3 sets x 12 reps\n\n"
+    "Continue for all 7 days. Include rest days where appropriate."
+)
+      
+        workout_data = {
+            "message": enhanced_prompt,
+            "create_plan": True,
+            "include_images": True,
+            "enable_search": False
+        }
+        response = fitness_trainer()
+        return response
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__
+        }), 500
+      
 @app.route("/get-exercise-images", methods=["POST"])
 def get_exercise_images():
-    """
-    Dedicated endpoint for fetching exercise images
-    """
+    """Dedicated endpoint for fetching exercise images"""
     try:
         data = request.get_json()
         exercise_name = data.get("exercise", "")
@@ -398,44 +567,23 @@ def get_exercise_images():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/search", methods=["POST"])
-def manual_search():
-    """
-    Manual search endpoint for testing DuckDuckGo integration
-    """
-    try:
-        data = request.get_json()
-        query = data.get("query", "")
-
-        if not query:
-            return jsonify({"error": "Query is required"}), 400
-
-        search_results = search_fitness_info(query)
-
-        return jsonify({
-            "query": query,
-            "search_results": search_results,
-            "timestamp": datetime.now().isoformat()
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({
-        "message": "AI Fitness Trainer API with RAG and Image Search is running",
+        "message": "AI Fitness Trainer API with Calendar Integration is running",
         "features": [
             "Fitness training advice",
-            "DuckDuckGo search integration",
+            "Workout plan creation and parsing",
+            "Calendar integration support",
+            "DuckDuckGo search integration", 
             "Exercise image search and display",
             "Real-time information retrieval",
             "Evidence-based recommendations"
         ],
         "endpoints": {
-            "/fitness-trainer": "POST - Main fitness trainer endpoint with image search",
+            "/fitness-trainer": "POST - Main fitness trainer endpoint with plan creation",
+            "/create-workout-plan": "POST - Dedicated workout plan creation",
             "/get-exercise-images": "POST - Get images for specific exercises",
-            "/search": "POST - Manual search testing",
             "/": "GET - API status"
         }
     })
@@ -444,11 +592,9 @@ def index():
 def health_check():
     """Health check endpoint"""
     try:
-        # Test search functionality
         test_search = search_fitness_info("fitness", max_results=1)
         search_working = "No relevant search results found." not in test_search
         
-        # Test image search
         test_images = search_exercise_images("push-ups", max_results=1)
         images_working = len(test_images) > 0
 
@@ -456,6 +602,7 @@ def health_check():
             "status": "healthy",
             "search_enabled": search_working,
             "image_search_enabled": images_working,
+            "workout_plan_parsing": True,
             "model": MODEL,
             "timestamp": datetime.now().isoformat()
         })
@@ -467,18 +614,19 @@ def health_check():
         }), 503
 
 if __name__ == "__main__":
-    # Test search on startup
     try:
         test_result = search_fitness_info("fitness test", max_results=1)
         print("✅ DuckDuckGo text search is working")
         print(f"Test result: {test_result[:100]}...")
         
-        # Test image search
         test_images = search_exercise_images("push-ups", max_results=1)
         print(f"✅ DuckDuckGo image search is working - Found {len(test_images)} images")
         
+        test_plan = parse_workout_plan_from_text("Day 1: Chest\n- Bench Press: 3x12\n- Push-ups: 3x15")
+        print(f"✅ Workout plan parsing is working - Parsed {len(test_plan)} workouts")
+        
     except Exception as e:
-        print(f"⚠️ DuckDuckGo search test failed: {e}")
+        print(f"⚠️ Startup tests failed: {e}")
 
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
