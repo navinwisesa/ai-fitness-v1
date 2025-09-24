@@ -436,10 +436,8 @@ def fitness_trainer():
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
-            
         if not create_plan:
             create_plan = should_create_workout_plan(user_message)
-
         search_context = ""
         search_used = False
 
@@ -447,10 +445,9 @@ def fitness_trainer():
             print(f"Searching for: {user_message}")
             search_context = search_fitness_info(user_message)
             search_used = True
-
         system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance to users on their wellness journey. Your role is to motivate, educate, and assist users in achieving their fitness and health goals safely and effectively.
 
-{('SPECIAL INSTRUCTION: The user is asking for a workout plan. Please provide a structured workout plan that can be parsed and added to their calendar. Use clear day-by-day format like "Day 1: [workout name]" followed by exercises with sets and reps. Include a variety of exercises to ensure comprehensive training.' if create_plan else '')}
+{('SPECIAL INSTRUCTION: The user is asking for a workout plan. Please provide a structured workout plan that can be parsed and added to their calendar. Use clear day-by-day format like "Day 1: [workout name]" followed by exercises with sets and reps.' if create_plan else '')}
 
 When providing workout recommendations or exercise instructions, please format your response to clearly list exercises with their descriptions. Use clear exercise names that can be easily identified for image search integration.
 
@@ -459,7 +456,6 @@ CORE PRINCIPLES:
 - Evidence-Based Approach: Base recommendations on established fitness science
 - Progressive Overload: Gradually increase difficulty over time
 - Individual Adaptation: Consider user's fitness level and goals
-- Exercise Variety: Include diverse movements to target different muscle groups and movement patterns
 
 Format exercises clearly like:
 **Exercise Name**: Description of the exercise and technique.
@@ -468,7 +464,6 @@ For workout plans, use this structure:
 Day 1: [Focus Area]
 - Exercise 1: 3 sets x 12 reps
 - Exercise 2: 3 sets x 10 reps
-- Exercise 3: 4 sets x 8 reps
 
 IMPORTANT LIMITATIONS AND BOUNDARIES:
 - Never provide medical diagnoses or treatment advice
@@ -476,17 +471,8 @@ IMPORTANT LIMITATIONS AND BOUNDARIES:
 - Emphasize the importance of proper warm-up and cool-down
 - Suggest modifications for different fitness levels
 
-When creating workout plans, ensure exercise variety including:
-- Compound movements (squats, deadlifts, presses)
-- Isolation exercises (curls, extensions, raises)
-- Bodyweight exercises (push-ups, pull-ups, planks)
-- Functional movements (lunges, rows, carries)
-- Cardiovascular exercises when appropriate
-
-When answering, keep responses concise and actionable. If creating a workout plan, provide a clear day-by-day structure with diverse exercises."""
-
+When answering, keep responses concise and actionable. If creating a workout plan, provide a clear day-by-day structure."""
         messages = [{"role": "system", "content": system_prompt}]
-        
         if search_context and search_used:
             messages.append({
                 "role": "system",
@@ -494,7 +480,6 @@ When answering, keep responses concise and actionable. If creating a workout pla
             })
 
         messages.append({"role": "user", "content": user_message})
-
         payload = {
             "model": MODEL,
             "messages": messages,
@@ -525,22 +510,11 @@ When answering, keep responses concise and actionable. If creating a workout pla
             }), 500
 
         reply = result["choices"][0]["message"]["content"]
-        
-        # Parse workout plan
         workout_plan = []
         if create_plan:
             workout_plan = parse_workout_plan_from_text(reply)
-
-        # Enhanced image search for workout plans
         exercise_images = {}
-        all_exercise_images = {}
-        
-        if create_plan and workout_plan and include_images:
-            # Get images for all exercises in the workout plan
-            all_exercise_images = get_all_exercise_images_for_plan(workout_plan)
-            exercise_images = all_exercise_images  # For backward compatibility
-        elif include_images and should_include_images(user_message, reply):
-            # Regular exercise image search for non-plan responses
+        if include_images and should_include_images(user_message, reply):
             detected_exercises = extract_exercises_from_text(reply)
             print(f"Detected exercises: {detected_exercises}")
             
@@ -554,13 +528,11 @@ When answering, keep responses concise and actionable. If creating a workout pla
             "user_message": user_message,
             "ai_reply": reply,
             "exercise_images": exercise_images,
-            "all_exercise_images": all_exercise_images,  # New: comprehensive image data
             "workout_plan": workout_plan,
             "plan_created": len(workout_plan) > 0,
             "search_used": search_used,
             "timestamp": datetime.now().isoformat(),
-            "model_used": MODEL,
-            "total_exercises": len(all_exercise_images) if all_exercise_images else len(exercise_images)
+            "model_used": MODEL
         })
 
     except Exception as e:
@@ -568,6 +540,7 @@ When answering, keep responses concise and actionable. If creating a workout pla
             "error": str(e),
             "type": type(e).__name__
         }), 500
+
 @app.route("/create-workout-plan", methods=["POST"])
 def create_workout_plan():
     """Dedicated endpoint for creating workout plans"""
@@ -608,178 +581,28 @@ def create_workout_plan():
             "type": type(e).__name__
         }), 500
       
-@app.route("/search-exercise-images", methods=["POST"])
-def search_exercise_images(exercise_name, max_results=5):
-    """Enhanced search for exercise demonstration images/GIFs using DuckDuckGo with multiple search strategies"""
+@app.route("/get-exercise-images", methods=["POST"])
+def get_exercise_images():
+    """Dedicated endpoint for fetching exercise images"""
     try:
-        with DDGS() as ddgs:
-            all_results = []
-            
-            # Strategy 1: Primary search with multiple keyword variations
-            search_queries = [
-                f"{exercise_name} exercise demonstration gif animated",
-                f"{exercise_name} workout form tutorial gif",
-                f"{exercise_name} proper technique demonstration",
-                f"{exercise_name} exercise how to animated",
-                f"how to do {exercise_name} exercise gif",
-                f"{exercise_name} fitness demonstration video thumbnail"
-            ]
-            
-            for query in search_queries:
-                try:
-                    search_results = list(ddgs.images(
-                        keywords=query,
-                        max_results=max_results,
-                        safesearch='moderate',
-                        size='Medium'
-                    ))
-                    
-                    for img in search_results:
-                        if img.get('image') and img.get('title'):
-                            url = img['image'].lower()
-                            title = img['title'].lower()
-                            
-                            # Enhanced filtering for better exercise content
-                            is_relevant = (
-                                # Animated content (preferred)
-                                url.endswith('.gif') or 
-                                '.gif' in url or
-                                'gif' in title or
-                                'animated' in title or
-                                'animation' in title or
-                                # Instructional content
-                                'demo' in title or
-                                'demonstration' in title or
-                                'tutorial' in title or
-                                'how to' in title or
-                                'technique' in title or
-                                'form' in title or
-                                'exercise' in title or
-                                'workout' in title or
-                                # Fitness-related sources
-                                any(source in img.get('source', '').lower() for source in [
-                                    'bodybuilding', 'fitness', 'gym', 'exercise', 'workout',
-                                    'muscle', 'strength', 'training', 'health'
-                                ])
-                            )
-                            
-                            # Avoid irrelevant content
-                            is_irrelevant = any(word in title for word in [
-                                'porn', 'sex', 'adult', 'xxx', 'nude', 'naked',
-                                'celebrity', 'gossip', 'news', 'politics'
-                            ]) or any(word in url for word in [
-                                'porn', 'sex', 'adult', 'xxx'
-                            ])
-                            
-                            if is_relevant and not is_irrelevant:
-                                # Determine content type
-                                content_type = 'animated' if (
-                                    url.endswith('.gif') or '.gif' in url or 
-                                    'gif' in title or 'animated' in title
-                                ) else 'image'
-                                
-                                result_data = {
-                                    'url': img['image'],
-                                    'title': img['title'],
-                                    'source': img.get('source', ''),
-                                    'width': img.get('width', 0),
-                                    'height': img.get('height', 0),
-                                    'type': content_type,
-                                    'relevance_score': _calculate_relevance_score(img, exercise_name)
-                                }
-                                
-                                # Avoid duplicates
-                                if not any(existing['url'] == result_data['url'] for existing in all_results):
-                                    all_results.append(result_data)
-                                    
-                except Exception as search_error:
-                    print(f"Search query failed for '{query}': {search_error}")
-                    continue
-                
-                # Stop if we have enough good results
-                if len(all_results) >= max_results * 2:
-                    break
-            
-            # Sort by relevance and type (animated first)
-            all_results.sort(key=lambda x: (
-                -1 if x['type'] == 'animated' else 0,  # Animated first
-                -x['relevance_score']  # Higher score first
-            ))
-            
-            return all_results[:max_results]
-            
+        data = request.get_json()
+        exercise_name = data.get("exercise", "")
+        max_results = data.get("max_results", 3)
+
+        if not exercise_name:
+            return jsonify({"error": "Exercise name is required"}), 400
+
+        images = search_exercise_images(exercise_name, max_results)
+
+        return jsonify({
+            "exercise": exercise_name,
+            "images": images,
+            "count": len(images),
+            "timestamp": datetime.now().isoformat()
+        })
+
     except Exception as e:
-        print(f"Image search error for {exercise_name}: {e}")
-        return []
-
-def _calculate_relevance_score(img_data, exercise_name):
-    """Calculate relevance score for image results"""
-    score = 0
-    title = img_data.get('title', '').lower()
-    source = img_data.get('source', '').lower()
-    exercise_lower = exercise_name.lower()
-    
-    # Exercise name match
-    if exercise_lower in title:
-        score += 10
-    
-    # Keywords in title
-    fitness_keywords = ['exercise', 'workout', 'training', 'fitness', 'gym', 'muscle']
-    instruction_keywords = ['how to', 'tutorial', 'demonstration', 'technique', 'form', 'guide']
-    
-    for keyword in fitness_keywords:
-        if keyword in title:
-            score += 3
-            
-    for keyword in instruction_keywords:
-        if keyword in title:
-            score += 5
-    
-    # Trusted fitness sources
-    trusted_sources = ['bodybuilding', 'fitness', 'muscle', 'strength', 'exercise', 'gym']
-    for source_keyword in trusted_sources:
-        if source_keyword in source:
-            score += 4
-    
-    # Image dimensions (prefer reasonable sizes)
-    width = img_data.get('width', 0)
-    height = img_data.get('height', 0)
-    if 200 <= width <= 800 and 200 <= height <= 600:
-        score += 2
-    
-    return score
-
-def get_all_exercise_images_for_plan(workout_plan):
-    """Get images for all exercises in a workout plan"""
-    all_exercise_images = {}
-    unique_exercises = set()
-    
-    # Collect all unique exercises from the plan
-    for plan in workout_plan:
-        for exercise in plan.exercises:
-            exercise_name = exercise.name if hasattr(exercise, 'name') else exercise.get('name', '')
-            if exercise_name and exercise_name not in unique_exercises:
-                unique_exercises.add(exercise_name)
-    
-    # Search for images for each unique exercise
-    for exercise_name in unique_exercises:
-        try:
-            images = search_exercise_images(exercise_name, max_results=3)
-            if images:
-                all_exercise_images[exercise_name] = images
-                print(f"Found {len(images)} images for {exercise_name}")
-            else:
-                # Fallback: try simplified search
-                simplified_name = exercise_name.split()[0]  # Take first word
-                images = search_exercise_images(simplified_name, max_results=2)
-                if images:
-                    all_exercise_images[exercise_name] = images
-                    print(f"Found {len(images)} images for {exercise_name} (simplified search)")
-        except Exception as e:
-            print(f"Failed to get images for {exercise_name}: {e}")
-            continue
-    
-    return all_exercise_images
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/", methods=["GET"])
 def index():
