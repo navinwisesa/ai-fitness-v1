@@ -37,10 +37,35 @@ def generate_workout_colors():
     ]
     return random.choice(colors)
 
+def estimate_workout_duration(exercises):
+    """Calculate realistic workout duration based on exercises"""
+    if not exercises:
+        return 60  # Default 60 minutes
+    
+    # Time estimates per exercise type (in minutes)
+    base_warmup_cooldown = 15  # 10 min warmup + 5 min cooldown
+    exercise_time = 0
+    
+    for exercise in exercises:
+        sets = exercise.get('sets', 3)
+        reps = exercise.get('reps', 10)
+        
+        # Estimate time per exercise based on sets and type
+        if any(word in exercise.get('name', '').lower() for word in ['press', 'squat', 'deadlift', 'pull-up']):
+            # Compound exercises take longer (rest between sets)
+            exercise_time += sets * 3  # 3 minutes per set (including rest)
+        elif any(word in exercise.get('name', '').lower() for word in ['curl', 'raise', 'extension', 'fly']):
+            # Isolation exercises take less time
+            exercise_time += sets * 2  # 2 minutes per set
+        else:
+            # Default time
+            exercise_time += sets * 2.5
+    
+    total_time = base_warmup_cooldown + exercise_time
+    return min(max(total_time, 30), 120)
+
 def parse_workout_plan_from_text(ai_response):
-    """
-    Fixed parser to extract structured workout plans that work with the calendar
-    """
+    """Enhanced parser with realistic duration calculation"""
     workouts = []
     
     # Look for clear day indicators
@@ -68,13 +93,14 @@ def parse_workout_plan_from_text(ai_response):
                 continue
                 
             exercises = extract_exercises_from_day_text(day_content)
+            duration = estimate_workout_duration(exercises)  # Calculate realistic duration
             
             if exercises:
                 workout = {
                     'day': day_number,
-                    'name': f"Day {day_number} Workout",
+                    'name': f"Day {day_number} - {determine_primary_category(exercises).title()}",
                     'exercises': exercises,
-                    'duration': estimate_workout_duration(exercises),
+                    'duration': duration,  # Use calculated duration
                     'category': determine_primary_category(exercises),
                 }
                 workouts.append(workout)
