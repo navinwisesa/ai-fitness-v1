@@ -209,11 +209,16 @@ def determine_primary_category(exercises):
     if not exercises:
         return 'other'
     
-    categories = [ex.get('category', 'other') for ex in exercises]
+    # Assuming 'exercises' is a list of Exercise objects
+    categories = [ex.category for ex in exercises]
     category_counts = {}
     for cat in categories:
         category_counts[cat] = category_counts.get(cat, 0) + 1
     
+    # Find the most frequent category
+    if not category_counts:
+        return 'other'
+        
     return max(category_counts.items(), key=lambda x: x[1])[0]
 
 def estimate_workout_duration(exercises):
