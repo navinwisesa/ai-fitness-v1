@@ -10,17 +10,18 @@ app = Flask(__name__)
 
 # Environment variables for API keys
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
-                               "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")
+                               "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")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
-# Exercise keywords that should trigger image search
-EXERCISE_KEYWORDS = [
-    'shuttle runs', 'cone drills', 'ladder drills', 'box jumps', 'zig-zag runs',
-    'burpees', 'push-ups', 'squats', 'lunges', 'planks', 'deadlifts', 'pull-ups',
-    'jumping jacks', 'mountain climbers', 'high knees', 'butt kicks', 'bear crawls',
-    'jump rope', 'sprints', 'agility ladder', 'resistance band', 'kettlebell swing'
+# Fitness-related terms that indicate image-worthy content
+FITNESS_INDICATORS = [
+    'exercise', 'workout', 'stretch', 'movement', 'pose', 'position', 'form',
+    'technique', 'drill', 'routine', 'training', 'bicep', 'tricep', 'chest',
+    'back', 'shoulder', 'leg', 'core', 'abs', 'glute', 'cardio', 'strength',
+    'flexibility', 'mobility', 'yoga', 'pilates', 'calisthenics', 'bodyweight',
+    'dumbbell', 'barbell', 'kettlebell', 'resistance', 'band', 'machine'
 ]
 
 def search_exercise_images(exercise_name, max_results=3):
@@ -56,18 +57,103 @@ def search_exercise_images(exercise_name, max_results=3):
         print(f"Image search error: {e}")
         return []
 
+def should_include_images(user_message, ai_response):
+    """
+    Determine if the content warrants exercise images based on context
+    """
+    combined_text = f"{user_message} {ai_response}".lower()
+    
+    # Check for fitness-related indicators
+    fitness_related = any(indicator in combined_text for indicator in FITNESS_INDICATORS)
+    
+    # Check for instructional language that suggests demonstrations would be helpful
+    instructional_phrases = [
+        'how to', 'technique', 'form', 'proper', 'correct', 'demonstration',
+        'perform', 'execute', 'do this', 'steps', 'position', 'posture'
+    ]
+    
+    instructional = any(phrase in combined_text for phrase in instructional_phrases)
+    
+    return fitness_related and (instructional or 'workout' in combined_text or 'exercise' in combined_text)
+
 def extract_exercises_from_text(text):
     """
-    Extract exercise names from AI response text
+    Intelligently extract exercise/movement names from AI response text using NLP techniques
     """
+    import re
+    
+    # Common exercise patterns
+    exercise_patterns = [
+        # Pattern 1: **Exercise Name**: description
+        r'\*\*([^*]+)\*\*:',
+        # Pattern 2: 1. Exercise Name - description  
+        r'\d+\.\s*([^-\n]+)(?:\s*[-–]|\n)',
+        # Pattern 3: Exercise Name (standalone with context)
+        r'(?:perform|do|try|practice|start with|include)\s+([^,.!?\n]+?)(?:\s+(?:exercise|stretch|movement|pose))?(?:[,.!?\n]|$)',
+        # Pattern 4: "the [exercise name]" pattern
+        r'the\s+([^,.!?\n]{2,30}?)(?:\s+(?:exercise|stretch|movement|pose|position))',
+    ]
+    
     found_exercises = []
-    text_lower = text.lower()
     
-    for exercise in EXERCISE_KEYWORDS:
-        if exercise.lower() in text_lower:
-            found_exercises.append(exercise)
+    for pattern in exercise_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            exercise_name = match.group(1).strip()
+            
+            # Clean up the extracted name
+            exercise_name = re.sub(r'^(a|an|the)\s+', '', exercise_name, flags=re.IGNORECASE)
+            exercise_name = re.sub(r'\s+', ' ', exercise_name)
+            
+            # Validate it's likely an exercise/stretch
+            if _is_valid_exercise_name(exercise_name):
+                found_exercises.append(exercise_name)
     
-    return found_exercises
+    # Remove duplicates while preserving order
+    unique_exercises = []
+    seen = set()
+    for exercise in found_exercises:
+        lower_exercise = exercise.lower()
+        if lower_exercise not in seen and len(lower_exercise) > 2:
+            seen.add(lower_exercise)
+            unique_exercises.append(exercise)
+    
+    return unique_exercises[:5]  # Limit to 5 to avoid too many API calls
+
+def _is_valid_exercise_name(name):
+    """
+    Validate if extracted text is likely an exercise name
+    """
+    if not name or len(name) < 3 or len(name) > 50:
+        return False
+    
+    # Skip if it's just common words
+    common_words = {'and', 'or', 'but', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'would', 'should', 'could'}
+    words = name.lower().split()
+    if all(word in common_words for word in words):
+        return False
+    
+    # Check if it contains fitness-related terms or action words
+    fitness_terms = FITNESS_INDICATORS + [
+        'push', 'pull', 'lift', 'raise', 'lower', 'bend', 'twist', 'rotate', 'hold',
+        'press', 'curl', 'extension', 'flexion', 'crunch', 'raise', 'fly', 'row',
+        'squat', 'lunge', 'plank', 'bridge', 'twist', 'stretch', 'reach'
+    ]
+    
+    name_lower = name.lower()
+    has_fitness_term = any(term in name_lower for term in fitness_terms)
+    
+    # Also check for common exercise naming patterns
+    exercise_patterns = [
+        r'\w+\s+(press|curl|raise|extension|stretch|pose)',
+        r'(morning|evening|daily|basic|simple|easy)\s+\w+',
+        r'\w+\s+(workout|routine|exercise)',
+        r'(bicep|tricep|chest|back|shoulder|leg|core|ab)\s+\w+',
+    ]
+    
+    has_pattern = any(re.search(pattern, name_lower) for pattern in exercise_patterns)
+    
+    return has_fitness_term or has_pattern
 
 def search_fitness_info(query, max_results=5):
     """
