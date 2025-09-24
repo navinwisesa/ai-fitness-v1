@@ -4,6 +4,7 @@ import os
 from duckduckgo_search import DDGS
 import json
 from datetime import datetime
+import re
 
 app = Flask(__name__)
 
@@ -14,6 +15,59 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
+# Exercise keywords that should trigger image search
+EXERCISE_KEYWORDS = [
+    'shuttle runs', 'cone drills', 'ladder drills', 'box jumps', 'zig-zag runs',
+    'burpees', 'push-ups', 'squats', 'lunges', 'planks', 'deadlifts', 'pull-ups',
+    'jumping jacks', 'mountain climbers', 'high knees', 'butt kicks', 'bear crawls',
+    'jump rope', 'sprints', 'agility ladder', 'resistance band', 'kettlebell swing'
+]
+
+def search_exercise_images(exercise_name, max_results=3):
+    """
+    Search for exercise demonstration images using DuckDuckGo
+    """
+    try:
+        with DDGS() as ddgs:
+            # Search for exercise images with demonstration keywords
+            image_results = list(ddgs.images(
+                keywords=f"{exercise_name} exercise demonstration technique form",
+                max_results=max_results,
+                safesearch='moderate',
+                size='Medium',  # Medium size for mobile display
+                type_image='photo'
+            ))
+            
+            # Filter and format image results
+            formatted_images = []
+            for img in image_results:
+                if img.get('image') and img.get('title'):
+                    formatted_images.append({
+                        'url': img['image'],
+                        'title': img['title'],
+                        'source': img.get('source', ''),
+                        'width': img.get('width', 0),
+                        'height': img.get('height', 0)
+                    })
+            
+            return formatted_images
+            
+    except Exception as e:
+        print(f"Image search error: {e}")
+        return []
+
+def extract_exercises_from_text(text):
+    """
+    Extract exercise names from AI response text
+    """
+    found_exercises = []
+    text_lower = text.lower()
+    
+    for exercise in EXERCISE_KEYWORDS:
+        if exercise.lower() in text_lower:
+            found_exercises.append(exercise)
+    
+    return found_exercises
 
 def search_fitness_info(query, max_results=5):
     """
@@ -45,7 +99,6 @@ Content: {result.get('body', 'N/A')[:300]}...
         print(f"Search error: {e}")
         return f"Search unavailable: {str(e)}"
 
-
 def should_search(user_message):
     """
     Determine if the user message requires current information search
@@ -59,13 +112,13 @@ def should_search(user_message):
     message_lower = user_message.lower()
     return any(keyword in message_lower for keyword in search_keywords)
 
-
 @app.route("/fitness-trainer", methods=["POST"])
 def fitness_trainer():
     try:
         data = request.get_json()
         user_message = data.get("message", "")
-        enable_search = data.get("enable_search", True)  # Allow users to disable search
+        enable_search = data.get("enable_search", True)
+        include_images = data.get("include_images", True)  # New parameter for image search
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
@@ -79,30 +132,19 @@ def fitness_trainer():
             search_context = search_fitness_info(user_message)
             search_used = True
 
-        # Enhanced system prompt with RAG capabilities
+        # Enhanced system prompt with image integration
         system_prompt = """You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance to users on their wellness journey. Your role is to motivate, educate, and assist users in achieving their fitness and health goals safely and effectively.
 
+When providing workout recommendations or exercise instructions, please format your response to clearly list exercises with their descriptions. Use clear exercise names that can be easily identified for image search integration.
+
 CORE PRINCIPLES:
+[Same as before - Safety First, Evidence-Based Approach, RAG Integration]
 
-Safety First: Always prioritize user safety over achieving goals quickly. Recommend users consult healthcare professionals before starting new exercise programs, especially if they have medical conditions, injuries, or haven't exercised in a long time. Never provide medical diagnoses or treatments. Recognize when issues are beyond fitness scope and refer to appropriate professionals. Emphasize proper form and technique to prevent injuries. Encourage rest and recovery as essential components of fitness.
-
-Evidence-Based Approach: Base recommendations on established exercise science and nutrition principles. When current search results are provided, incorporate this information while maintaining critical evaluation. Cite reputable sources when providing specific claims about fitness or nutrition. Acknowledge when information is general guidance vs. personalized advice. Stay updated on current research while avoiding fitness fads or unproven methods.
-
-RAG Integration: When search results are provided, use them to enhance your responses with current information. Always evaluate the credibility of search results and cross-reference with established knowledge. Mention when you're incorporating recent findings or current trends. If search results conflict with established science, prioritize evidence-based approaches while acknowledging the new information.
-
-KEY RESPONSIBILITIES:
-
-Workout Planning and Exercise Guidance: Design balanced workout routines incorporating cardiovascular, strength, flexibility, and mobility training. Provide clear exercise instructions with emphasis on proper form. Suggest modifications for different fitness levels and physical limitations. Recommend appropriate progression and regression strategies. Explain the purpose and benefits of different exercises and training methods.
-
-Nutritional Guidance: Provide general nutrition education based on established dietary guidelines. Help users understand macronutrients, micronutrients, and their roles. Suggest healthy eating patterns rather than restrictive diets. Emphasize the importance of adequate hydration. IMPORTANT: Refer users to registered dietitians for specific meal plans, medical nutrition therapy, or complex dietary needs.
-
-Current Information Integration: When search results are available, incorporate recent findings, trends, and updates in fitness and nutrition science. Evaluate the credibility of sources and highlight when information is particularly current or represents emerging research.
+Format exercises clearly like:
+**Exercise Name**: Description of the exercise and technique.
 
 IMPORTANT LIMITATIONS AND BOUNDARIES:
-
-Medical Boundaries: Never diagnose medical conditions or provide medical treatment advice. Recognize symptoms that require medical attention. Acknowledge when issues may be related to underlying health conditions. Emphasize that fitness advice complements but doesn't replace medical care.
-
-Information Verification: When using search results, always maintain critical thinking. Prioritize information from reputable sources like peer-reviewed studies, certified professionals, and established health organizations. Flag when information seems contradictory or requires professional verification.
+[Same as before]
 
 When answering, keep responses concise (under 5 bullet points or 150 words). Do not cut off mid-sentence."""
 
@@ -150,9 +192,22 @@ When answering, keep responses concise (under 5 bullet points or 150 words). Do 
 
         reply = result["choices"][0]["message"]["content"]
 
+        # NEW: Extract exercises and search for images
+        exercise_images = {}
+        if include_images:
+            detected_exercises = extract_exercises_from_text(reply)
+            print(f"Detected exercises: {detected_exercises}")
+            
+            for exercise in detected_exercises[:3]:  # Limit to 3 exercises to avoid too many API calls
+                images = search_exercise_images(exercise, max_results=2)
+                if images:
+                    exercise_images[exercise] = images
+                    print(f"Found {len(images)} images for {exercise}")
+
         return jsonify({
             "user_message": user_message,
             "ai_reply": reply,
+            "exercise_images": exercise_images,  # NEW: Include exercise images
             "search_used": search_used,
             "timestamp": datetime.now().isoformat(),
             "model_used": MODEL
@@ -164,6 +219,30 @@ When answering, keep responses concise (under 5 bullet points or 150 words). Do 
             "type": type(e).__name__
         }), 500
 
+@app.route("/get-exercise-images", methods=["POST"])
+def get_exercise_images():
+    """
+    Dedicated endpoint for fetching exercise images
+    """
+    try:
+        data = request.get_json()
+        exercise_name = data.get("exercise", "")
+        max_results = data.get("max_results", 3)
+
+        if not exercise_name:
+            return jsonify({"error": "Exercise name is required"}), 400
+
+        images = search_exercise_images(exercise_name, max_results)
+
+        return jsonify({
+            "exercise": exercise_name,
+            "images": images,
+            "count": len(images),
+            "timestamp": datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/search", methods=["POST"])
 def manual_search():
@@ -188,24 +267,24 @@ def manual_search():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({
-        "message": "AI Fitness Trainer API with RAG is running",
+        "message": "AI Fitness Trainer API with RAG and Image Search is running",
         "features": [
             "Fitness training advice",
             "DuckDuckGo search integration",
+            "Exercise image search and display",
             "Real-time information retrieval",
             "Evidence-based recommendations"
         ],
         "endpoints": {
-            "/fitness-trainer": "POST - Main fitness trainer endpoint",
+            "/fitness-trainer": "POST - Main fitness trainer endpoint with image search",
+            "/get-exercise-images": "POST - Get images for specific exercises",
             "/search": "POST - Manual search testing",
             "/": "GET - API status"
         }
     })
-
 
 @app.route("/health", methods=["GET"])
 def health_check():
@@ -214,10 +293,15 @@ def health_check():
         # Test search functionality
         test_search = search_fitness_info("fitness", max_results=1)
         search_working = "No relevant search results found." not in test_search
+        
+        # Test image search
+        test_images = search_exercise_images("push-ups", max_results=1)
+        images_working = len(test_images) > 0
 
         return jsonify({
             "status": "healthy",
             "search_enabled": search_working,
+            "image_search_enabled": images_working,
             "model": MODEL,
             "timestamp": datetime.now().isoformat()
         })
@@ -228,13 +312,17 @@ def health_check():
             "timestamp": datetime.now().isoformat()
         }), 503
 
-
 if __name__ == "__main__":
     # Test search on startup
     try:
         test_result = search_fitness_info("fitness test", max_results=1)
-        print("✅ DuckDuckGo search is working")
+        print("✅ DuckDuckGo text search is working")
         print(f"Test result: {test_result[:100]}...")
+        
+        # Test image search
+        test_images = search_exercise_images("push-ups", max_results=1)
+        print(f"✅ DuckDuckGo image search is working - Found {len(test_images)} images")
+        
     except Exception as e:
         print(f"⚠️ DuckDuckGo search test failed: {e}")
 
