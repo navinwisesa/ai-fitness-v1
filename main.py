@@ -515,7 +515,7 @@ def create_workout_plan():
         if not plan_request:
             return jsonify({"error": "Plan request is required"}), 400
           
-        enhanced_ prompt = (
+        enhanced_prompt = (
     f'Create a detailed weekly workout plan based on this request: "{plan_request}"\n\n'
     f'User preferences: {json.dumps(user_preferences)}\n\n'
     "Please provide a structured 7-day workout plan using this format:\n\n"
