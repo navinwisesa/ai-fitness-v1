@@ -539,6 +539,29 @@ def should_create_workout_plan(user_message):
     ]
     message_lower = user_message.lower()
     return any(keyword in message_lower for keyword in plan_keywords)
+  
+def is_plan_modification_request(user_message, active_plan=None):
+    """Detect if user wants to modify existing plan rather than create new one"""
+    modification_keywords = [
+        'modify', 'change', 'edit', 'update', 'adjust', 'revise',
+        'instead of', 'replace', 'switch', 'alternate', 'different'
+    ]
+    
+    plan_reference_keywords = [
+        'day', 'workout', 'exercise', 'plan', 'routine'
+    ]
+    
+    message_lower = user_message.lower()
+    
+    # Check for modification intent
+    has_modification_intent = any(keyword in message_lower for keyword in modification_keywords)
+    references_plan = any(keyword in message_lower for keyword in plan_reference_keywords)
+    
+    # If active plan exists and user references plan elements, likely modification
+    if active_plan and references_plan:
+        return True
+        
+    return has_modification_intent and references_plan
 
 @app.route("/fitness-trainer", methods=["POST"])
 def fitness_trainer():
@@ -548,11 +571,22 @@ def fitness_trainer():
         enable_search = data.get("enable_search", True)
         include_images = data.get("include_images", True)
         create_plan = data.get("create_plan", False)
+        active_plan = data.get("active_plan")  # Added: current active plan
+        conversation_summary = data.get("conversation_summary", "")  # Added: conversation context
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
+            
+        # Enhanced plan detection with context awareness
         if not create_plan:
             create_plan = should_create_workout_plan(user_message)
+            
+        # Check if this is a plan modification request
+        plan_modified = False
+        if active_plan and is_plan_modification_request(user_message, active_plan):
+            create_plan = True
+            plan_modified = True
+
         search_context = ""
         search_used = False
 
@@ -560,12 +594,21 @@ def fitness_trainer():
             print(f"Searching for: {user_message}")
             search_context = search_fitness_info(user_message)
             search_used = True
-        system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance to users on their wellness journey. Your role is to motivate, educate, and assist users in achieving their fitness and health goals safely and effectively.
+        system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance.
 
-{('SPECIAL INSTRUCTION: The user is asking for a workout plan. Please provide a structured workout plan that can be parsed and added to their calendar. Use clear day-by-day format like "Day 1: [workout name]" followed by exercises with sets and reps.' if create_plan else '')}
+CONTINUITY INSTRUCTIONS:
+- Remember the conversation history and active workout plan
+- Reference previous discussions when relevant
+- If user asks about modifying the active plan, edit it instead of creating new one
+- Maintain consistent recommendations based on user's profile and goals
 
-When providing workout recommendations or exercise instructions, please format your response to clearly list exercises with their descriptions. Use clear exercise names that can be easily identified for image search integration.
+{'ACTIVE WORKOUT PLAN CONTEXT: ' + json.dumps(active_plan) if active_plan else 'NO ACTIVE PLAN: Create new plans when requested'}
 
+{'CONVERSATION HISTORY: ' + conversation_summary if conversation_summary else 'NEW CONVERSATION: Establish context'}
+
+{('SPECIAL INSTRUCTION: ' + 
+  ('USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.' if plan_modified else 
+   'USER IS REQUESTING A NEW WORKOUT PLAN. Provide structured day-by-day format.')) if create_plan else ''}
 CORE PRINCIPLES:
 - Safety First: Always prioritize proper form and injury prevention
 - Evidence-Based Approach: Base recommendations on established fitness science
@@ -644,7 +687,9 @@ When answering, keep responses concise and actionable. If creating a workout pla
             "ai_reply": reply,
             "exercise_images": exercise_images,
             "workout_plan": workout_plan,
-            "plan_created": len(workout_plan) > 0,
+            "plan_created": len(workout_plan) > 0 and not plan_modified,
+            "plan_updated": plan_modified,  # New field to indicate modification
+            "conversation_summary": generate_conversation_summary(user_message, reply),  # New field
             "search_used": search_used,
             "timestamp": datetime.now().isoformat(),
             "model_used": MODEL
@@ -655,7 +700,13 @@ When answering, keep responses concise and actionable. If creating a workout pla
             "error": str(e),
             "type": type(e).__name__
         }), 500
-
+      
+def generate_conversation_summary(user_message, ai_response):
+    """Generate a concise summary of the interaction for continuity"""
+    # Simple summary - you can enhance this with AI summarization
+    summary = f"User discussed: {user_message[:100]}... Assistant provided: {ai_response[:100]}..."
+    return summary
+  
 @app.route("/create-workout-plan", methods=["POST"])
 def create_workout_plan():
     """Dedicated endpoint for creating workout plans"""
