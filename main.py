@@ -759,16 +759,6 @@ def generate_conversation_summary(user_message, ai_response, preferences=None):
     """Generate detailed summary for rolling conversation memory"""
     summary_points = []
     
-    # Key points from user message
-    user_keywords = extract_key_phrases(user_message)
-    if user_keywords:
-        summary_points.append(f"User interest: {', '.join(user_keywords)}")
-    
-    # Key recommendations from AI
-    ai_recommendations = extract_recommendations(ai_response)
-    if ai_recommendations:
-        summary_points.append(f"Recommended: {', '.join(ai_recommendations)}")
-    
     # Learned preferences
     if preferences:
         pref_str = ', '.join([f"{k}:{v}" for k, v in preferences.items()])
