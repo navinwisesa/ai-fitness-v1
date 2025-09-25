@@ -562,12 +562,64 @@ def is_plan_modification_request(user_message, active_plan=None):
         return True
         
     return has_modification_intent and references_plan
-
+def generate_chat_title(first_message, ai_response):
+    """Generate a meaningful chat title based on conversation content"""
+    combined_text = f"{first_message} {ai_response}".lower()
+    
+    title_keywords = {
+        'workout plan': 'Workout Plan Discussion',
+        'nutrition': 'Nutrition & Diet Advice',
+        'weight loss': 'Weight Loss Journey',
+        'muscle gain': 'Muscle Building Program',
+        'beginner': 'Getting Started Guide',
+        'injury': 'Injury Prevention & Recovery',
+        'cardio': 'Cardio Training Plan',
+        'strength': 'Strength Training Program',
+        'flexibility': 'Flexibility & Mobility',
+        'home workout': 'Home Fitness Routine'
+    }
+    
+    for keyword, title in title_keywords.items():
+        if keyword in combined_text:
+            return title
+    
+    # Fallback: use first few words of AI response
+    words = ai_response.split()[:5]
+    return ' '.join(words) + '...'
+def extract_user_preferences(user_message, ai_response):
+    """Extract user preferences from conversation for cross-tab learning"""
+    preferences = {}
+    text_lower = f"{user_message} {ai_response}".lower()
+    
+    # Goal detection
+    if any(term in text_lower for term in ['lose weight', 'weight loss', 'slim down']):
+        preferences['primary_goal'] = 'weight_loss'
+    elif any(term in text_lower for term in ['build muscle', 'muscle gain', 'get bigger']):
+        preferences['primary_goal'] = 'muscle_gain'
+    elif any(term in text_lower for term in ['get stronger', 'increase strength', 'power']):
+        preferences['primary_goal'] = 'strength'
+    elif any(term in text_lower for term in ['endurance', 'stamina', 'cardio']):
+        preferences['primary_goal'] = 'endurance'
+    
+    # Equipment preferences
+    if any(term in text_lower for term in ['home workout', 'no equipment', 'bodyweight']):
+        preferences['equipment_preference'] = 'bodyweight'
+    elif any(term in text_lower for term in ['gym', 'weights', 'dumbbell']):
+        preferences['equipment_preference'] = 'full_gym'
+    
+    # Time preferences
+    if 'morning' in text_lower:
+        preferences['preferred_time'] = 'morning'
+    elif 'evening' in text_lower:
+        preferences['preferred_time'] = 'evening'
+    
+    return preferences
 @app.route("/fitness-trainer", methods=["POST"])
 def fitness_trainer():
     try:
         data = request.get_json()
         user_message = data.get("message", "")
+        user_profile = data.get("user_profile", {})
         enable_search = data.get("enable_search", True)
         include_images = data.get("include_images", True)
         create_plan = data.get("create_plan", False)
@@ -668,6 +720,8 @@ When answering, keep responses concise and actionable. If creating a workout pla
             }), 500
 
         reply = result["choices"][0]["message"]["content"]
+        learned_preferences = extract_user_preferences(user_message, reply)
+        conversation_summary = generate_conversation_summary(user_message, reply, learned_preferences)
         workout_plan = []
         if create_plan:
             workout_plan = parse_workout_plan_from_text(reply)
@@ -701,11 +755,26 @@ When answering, keep responses concise and actionable. If creating a workout pla
             "type": type(e).__name__
         }), 500
       
-def generate_conversation_summary(user_message, ai_response):
-    """Generate a concise summary of the interaction for continuity"""
-    # Simple summary - you can enhance this with AI summarization
-    summary = f"User discussed: {user_message[:100]}... Assistant provided: {ai_response[:100]}..."
-    return summary
+def generate_conversation_summary(user_message, ai_response, preferences=None):
+    """Generate detailed summary for rolling conversation memory"""
+    summary_points = []
+    
+    # Key points from user message
+    user_keywords = extract_key_phrases(user_message)
+    if user_keywords:
+        summary_points.append(f"User interest: {', '.join(user_keywords)}")
+    
+    # Key recommendations from AI
+    ai_recommendations = extract_recommendations(ai_response)
+    if ai_recommendations:
+        summary_points.append(f"Recommended: {', '.join(ai_recommendations)}")
+    
+    # Learned preferences
+    if preferences:
+        pref_str = ', '.join([f"{k}:{v}" for k, v in preferences.items()])
+        summary_points.append(f"Preferences: {pref_str}")
+    
+    return " | ".join(summary_points)
   
 @app.route("/create-workout-plan", methods=["POST"])
 def create_workout_plan():
