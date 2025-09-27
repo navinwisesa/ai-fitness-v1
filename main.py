@@ -108,10 +108,11 @@ def parse_workout_plan_from_text(ai_response):
     return workouts
 
 def extract_exercises_from_day_text(day_text):
-    """Simple but reliable exercise extraction"""
+    """Improved exercise extraction from day text"""
     exercises = []
     
-    # Look for exercise lines with common patterns
+    print(f"DEBUG: Extracting from day text: {day_text[:150]}...")
+    
     lines = day_text.split('\n')
     
     for line in lines:
@@ -119,15 +120,31 @@ def extract_exercises_from_day_text(day_text):
         if not line or line.startswith(('Rest', 'Day off', 'Recovery')):
             continue
             
-        # Pattern: "- Exercise: 3x12" or "• Bench Press: 3 sets x 12 reps"
-        exercise_match = re.search(r'[•\-]\s*([^:]+?)\s*:\s*(.+)', line)
-        if not exercise_match:
-            # Pattern: "Bench Press - 3x12"
-            exercise_match = re.search(r'([^\-]+?)\s*-\s*(.+)', line)
+        # Multiple patterns to catch different formats
+        patterns = [
+            r'[-•*]\s*\*\*([^*]+?)\*\*\s*:\s*(.+)',  # - **Exercise**: details
+            r'[-•*]\s*([^:]+?)\s*:\s*(.+)',          # - Exercise: details  
+            r'[-•*]\s*([^-]+?)\s*-\s*(.+)',          # - Exercise - details
+            r'(\d+\.\s*)?([^:]+?)\s*:\s*(.+)',       # 1. Exercise: details
+        ]
+        
+        exercise_match = None
+        for pattern in patterns:
+            exercise_match = re.search(pattern, line)
+            if exercise_match:
+                break
         
         if exercise_match:
-            exercise_name = exercise_match.group(1).strip()
-            details = exercise_match.group(2).strip()
+            if len(exercise_match.groups()) >= 3:  # Pattern with number
+                exercise_name = exercise_match.group(2).strip()
+                details = exercise_match.group(3).strip()
+            else:  # Pattern without number
+                exercise_name = exercise_match.group(1).strip()
+                details = exercise_match.group(2).strip()
+            
+            # Clean exercise name
+            exercise_name = re.sub(r'\*+', '', exercise_name).strip()
+            exercise_name = re.sub(r'^\d+\.\s*', '', exercise_name).strip()
             
             if _is_valid_exercise_name(exercise_name):
                 sets, reps, weight = parse_exercise_details(details)
@@ -140,7 +157,9 @@ def extract_exercises_from_day_text(day_text):
                     'category': categorize_exercise(exercise_name)
                 }
                 exercises.append(exercise)
+                print(f"DEBUG: Extracted exercise: {exercise_name} - {sets}x{reps}")
     
+    print(f"DEBUG: Day text extracted {len(exercises)} exercises")
     return exercises
 
 def parse_weekly_schedule_format(text):
@@ -435,60 +454,96 @@ def should_include_images(user_message, ai_response):
     return fitness_related and (instructional or 'workout' in combined_text or 'exercise' in combined_text)
 
 def extract_exercises_from_text(text):
-    """Enhanced extraction that handles workout plan formats better"""
+    """Comprehensive exercise extraction that captures ALL exercises"""
     found_exercises = []
     
-    print(f"DEBUG: Extracting exercises from text: {text[:200]}...")
+    print(f"DEBUG: Input text length: {len(text)}")
+    print(f"DEBUG: Text sample: {text[:300]}...")
     
-    # Pattern 1: Extract from workout plan format (Day X: exercises)
-    day_sections = re.split(r'\n(?=Day\s+\d+)', text, flags=re.IGNORECASE)
-    
-    for section in day_sections:
-        print(f"DEBUG: Processing section: {section[:100]}...")
-        
-        # Look for exercises in list format: "- Exercise Name: sets x reps"
-        exercise_lines = re.findall(
-            r'[-*•]\s*\*\*([^*]+)\*\*\s*:\s*\d+\s*sets?\s*[x×]\s*\d+\s*reps?', 
-            section, 
-            re.IGNORECASE
-        )
-        
-        for exercise in exercise_lines:
-            exercise = exercise.strip()
-            if _is_valid_exercise_name(exercise):
-                found_exercises.append(exercise)
-                print(f"DEBUG: Found exercise from workout plan: {exercise}")
-    
-    # Pattern 2: Extract from general mentions with **Exercise Name**
-    markdown_exercises = re.findall(r'\*\*([^*]+)\*\*', text)
-    for exercise in markdown_exercises:
-        exercise = exercise.strip()
-        if _is_valid_exercise_name(exercise) and ':' not in exercise:  # Avoid "Day 1:" etc.
-            found_exercises.append(exercise)
-            print(f"DEBUG: Found exercise from markdown: {exercise}")
-    
-    # Pattern 3: Extract from workout plan parsing
-    if 'Day' in text and ('sets' in text or 'reps' in text):
-        # This looks like a workout plan, extract from parsed workout data
+    # Method 1: Extract from workout plan data FIRST (most comprehensive)
+    try:
         workout_plans = parse_workout_plan_from_text(text)
+        print(f"DEBUG: Found {len(workout_plans)} workout plans")
+        
         for plan in workout_plans:
-            for exercise in plan.get('exercises', []):
-                exercise_name = exercise.get('name', '')
-                if exercise_name and _is_valid_exercise_name(exercise_name):
+            exercises = plan.get('exercises', [])
+            print(f"DEBUG: Day {plan.get('day')} has {len(exercises)} exercises")
+            
+            for exercise in exercises:
+                exercise_name = exercise.get('name', '').strip()
+                # Remove any markdown formatting
+                exercise_name = re.sub(r'\*+', '', exercise_name).strip()
+                
+                if exercise_name and len(exercise_name) > 2:
                     found_exercises.append(exercise_name)
-                    print(f"DEBUG: Found exercise from workout plan parsing: {exercise_name}")
+                    print(f"DEBUG: Added exercise from workout plan: '{exercise_name}'")
+    except Exception as e:
+        print(f"DEBUG: Error parsing workout plans: {e}")
+    
+    # Method 2: Extract from **Exercise**: format patterns
+    if len(found_exercises) < 5:  # If we haven't found many exercises, try regex
+        print("DEBUG: Trying additional regex patterns...")
+        
+        patterns = [
+            r'\*\*([^*]+?)\*\*\s*:\s*\d+\s*sets',  # **Exercise**: 3 sets
+            r'[-•]\s*\*\*([^*]+?)\*\*\s*:',        # - **Exercise**:
+            r'\*\*([^*]+?)\*\*\s*[-–—]\s*\d+',     # **Exercise** - 3
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+            for match in matches:
+                exercise_name = match.strip()
+                # Clean the name
+                exercise_name = re.sub(r'^(a|an|the)\s+', '', exercise_name, flags=re.IGNORECASE)
+                exercise_name = re.sub(r'\s+', ' ', exercise_name)
+                
+                if (len(exercise_name) > 2 and 
+                    exercise_name not in found_exercises and
+                    not any(word in exercise_name.lower() for word in ['day', 'workout', 'training', 'rest'])):
+                    found_exercises.append(exercise_name)
+                    print(f"DEBUG: Added exercise from regex: '{exercise_name}'")
+    
+    # Method 3: Find exercises from day sections manually
+    if len(found_exercises) < 3:
+        print("DEBUG: Trying manual day section parsing...")
+        
+        # Split by day sections
+        day_sections = re.split(r'\n(?=Day\s+\d+)', text, flags=re.IGNORECASE)
+        
+        for section in day_sections:
+            if 'Day' in section:
+                print(f"DEBUG: Processing section: {section[:100]}...")
+                
+                # Find all lines that look like exercise descriptions
+                lines = section.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    
+                    # Look for patterns like "- Exercise: sets x reps" or "• Exercise: sets x reps"
+                    exercise_match = re.search(r'[-•*]\s*\*?\*?([^:*]+?)\*?\*?\s*:\s*\d+\s*(?:sets?|x)', line, re.IGNORECASE)
+                    if exercise_match:
+                        exercise_name = exercise_match.group(1).strip()
+                        exercise_name = re.sub(r'\*+', '', exercise_name).strip()  # Remove markdown
+                        
+                        if (len(exercise_name) > 2 and 
+                            exercise_name not in found_exercises and
+                            not any(skip in exercise_name.lower() for skip in ['day', 'rest', 'break'])):
+                            found_exercises.append(exercise_name)
+                            print(f"DEBUG: Added exercise from manual parsing: '{exercise_name}'")
     
     # Remove duplicates while preserving order
     unique_exercises = []
     seen = set()
     for exercise in found_exercises:
-        exercise_lower = exercise.lower()
-        if exercise_lower not in seen:
+        exercise_lower = exercise.lower().strip()
+        if exercise_lower not in seen and len(exercise_lower) > 2:
             seen.add(exercise_lower)
             unique_exercises.append(exercise)
     
-    print(f"DEBUG: Final unique exercises found: {unique_exercises}")
-    return unique_exercises[:8]  # Limit to 8 exercises to avoid too many API calls
+    print(f"DEBUG: Final unique exercises: {unique_exercises}")
+    return unique_exercises[:8]  # Limit to 8 exercises
+
 
 # Also update the main fitness_trainer function to better handle exercise extraction
 
@@ -657,11 +712,9 @@ def fitness_trainer():
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
             
-        # Enhanced plan detection with context awareness
         if not create_plan:
             create_plan = should_create_workout_plan(user_message)
             
-        # Check if this is a plan modification request
         plan_modified = False
         if active_plan and is_plan_modification_request(user_message, active_plan):
             create_plan = True
@@ -675,13 +728,10 @@ def fitness_trainer():
             search_context = search_fitness_info(user_message)
             search_used = True
 
+        # Enhanced system prompt for better exercise formatting
         system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance.
 
-CONTINUITY INSTRUCTIONS:
-- Remember the conversation history and active workout plan
-- Reference previous discussions when relevant
-- If user asks about modifying the active plan, edit it instead of creating new one
-- Maintain consistent recommendations based on user's profile and goals
+CRITICAL FORMATTING RULE: Always format exercises as **Exercise Name**: sets x reps format for proper extraction.
 
 {'ACTIVE WORKOUT PLAN CONTEXT: ' + json.dumps(active_plan) if active_plan else 'NO ACTIVE PLAN: Create new plans when requested'}
 
@@ -689,34 +739,26 @@ CONTINUITY INSTRUCTIONS:
 
 {('SPECIAL INSTRUCTION: ' + 
   ('USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.' if plan_modified else 
-   'USER IS REQUESTING A NEW WORKOUT PLAN. Provide structured day-by-day format with exercises in **Exercise Name**: format.')) if create_plan else ''}
-
-CORE PRINCIPLES:
-- Safety First: Always prioritize proper form and injury prevention
-- Evidence-Based Approach: Base recommendations on established fitness science
-- Progressive Overload: Gradually increase difficulty over time
-- Individual Adaptation: Consider user's fitness level and goals
-
-IMPORTANT: When mentioning exercises, always format them as **Exercise Name** for proper extraction.
+   'USER IS REQUESTING A NEW WORKOUT PLAN. Use this EXACT format for each exercise:\n- **Exercise Name**: 3 sets x 12 reps')) if create_plan else ''}
 
 For workout plans, use this EXACT structure:
-Day 1: [Focus Area]
-- **Exercise Name**: 3 sets x 12 reps
-- **Another Exercise**: 3 sets x 10 reps
+Day 1: [Focus Area]  
+- **Barbell Bench Press**: 3 sets x 8 reps
+- **Incline Dumbbell Press**: 3 sets x 10 reps
+- **Dumbbell Bicep Curls**: 3 sets x 12 reps
 
-IMPORTANT LIMITATIONS AND BOUNDARIES:
-- Never provide medical diagnoses or treatment advice
-- Always recommend consulting healthcare professionals for injuries
-- Emphasize the importance of proper warm-up and cool-down
-- Suggest modifications for different fitness levels
+Day 2: [Focus Area]
+- **Pull-ups**: 3 sets x 10 reps  
+- **Barbell Rows**: 3 sets x 8 reps
+- **Hammer Curls**: 3 sets x 10 reps
 
-When answering, keep responses concise and actionable. If creating a workout plan, provide a clear day-by-day structure."""
+IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image extraction."""
 
         messages = [{"role": "system", "content": system_prompt}]
         if search_context and search_used:
             messages.append({
-                "role": "system",
-                "content": f"CURRENT SEARCH RESULTS (Use this information to enhance your response):\n{search_context}\n\nPlease incorporate relevant information from these search results while maintaining your evidence-based approach."
+                "role": "system", 
+                "content": f"SEARCH RESULTS:\n{search_context}"
             })
 
         messages.append({"role": "user", "content": user_message})
@@ -745,36 +787,36 @@ When answering, keep responses concise and actionable. If creating a workout pla
 
         if "choices" not in result or not result["choices"]:
             return jsonify({
-                "error": "Invalid response from OpenRouter",
+                "error": "Invalid response from OpenRouter", 
                 "details": result
             }), 500
 
         reply = result["choices"][0]["message"]["content"]
-        print(f"DEBUG: AI Reply: {reply[:300]}...")
-        
-        learned_preferences = extract_user_preferences(user_message, reply)
-        conversation_summary = generate_conversation_summary(user_message, reply, learned_preferences)
+        print(f"DEBUG: AI Reply length: {len(reply)}")
+        print(f"DEBUG: AI Reply sample: {reply[:200]}...")
         
         workout_plan = []
         if create_plan:
             workout_plan = parse_workout_plan_from_text(reply)
-            print(f"DEBUG: Parsed workout plan: {len(workout_plan)} days")
+            print(f"DEBUG: Parsed {len(workout_plan)} workout days")
         
         exercise_images = {}
         if include_images and should_include_images(user_message, reply):
+            # Extract exercises from the AI response
             detected_exercises = extract_exercises_from_text(reply)
-            print(f"DEBUG: Detected exercises for images: {detected_exercises}")
+            print(f"DEBUG: Detected {len(detected_exercises)} exercises for images: {detected_exercises}")
             
-            for exercise in detected_exercises[:5]:  # Limit to 5 to avoid too many API calls
-                print(f"DEBUG: Searching images for: {exercise}")
+            # Search for images for each detected exercise
+            for exercise in detected_exercises[:6]:  # Limit to 6 to avoid too many API calls
+                print(f"DEBUG: Searching images for exercise: '{exercise}'")
                 images = search_exercise_images(exercise, max_results=2)
                 if images:
                     exercise_images[exercise] = images
-                    print(f"DEBUG: Found {len(images)} images for {exercise}")
+                    print(f"DEBUG: Found {len(images)} images for '{exercise}'")
                 else:
-                    print(f"DEBUG: No images found for {exercise}")
+                    print(f"DEBUG: No images found for '{exercise}'")
 
-        print(f"DEBUG: Final exercise_images keys: {list(exercise_images.keys())}")
+        print(f"DEBUG: Final exercise_images contains: {list(exercise_images.keys())}")
         
         return jsonify({
             "user_message": user_message,
@@ -794,7 +836,7 @@ When answering, keep responses concise and actionable. If creating a workout pla
         return jsonify({
             "error": str(e),
             "type": type(e).__name__
-        }), 500  # Return unique exercises, max 8
+        }), 500
       
 def generate_conversation_summary(user_message, ai_response, preferences=None):
     """Generate detailed summary for rolling conversation memory"""
