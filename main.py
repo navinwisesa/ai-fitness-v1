@@ -729,17 +729,25 @@ def fitness_trainer():
             search_used = True
 
         # Enhanced system prompt for better exercise formatting
+        active_plan_context = 'ACTIVE WORKOUT PLAN CONTEXT: ' + json.dumps(active_plan) if active_plan else 'NO ACTIVE PLAN: Create new plans when requested'
+        conversation_context = 'CONVERSATION HISTORY: ' + conversation_summary if conversation_summary else 'NEW CONVERSATION: Establish context'
+        
+        special_instruction = ''
+        if create_plan:
+            if plan_modified:
+                special_instruction = 'SPECIAL INSTRUCTION: USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.'
+            else:
+                special_instruction = 'SPECIAL INSTRUCTION: USER IS REQUESTING A NEW WORKOUT PLAN. Use this EXACT format for each exercise:\n- **Exercise Name**: 3 sets x 12 reps'
+        
         system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance.
 
 CRITICAL FORMATTING RULE: Always format exercises as **Exercise Name**: sets x reps format for proper extraction.
 
-{'ACTIVE WORKOUT PLAN CONTEXT: ' + json.dumps(active_plan) if active_plan else 'NO ACTIVE PLAN: Create new plans when requested'}
+{active_plan_context}
 
-{'CONVERSATION HISTORY: ' + conversation_summary if conversation_summary else 'NEW CONVERSATION: Establish context'}
+{conversation_context}
 
-{('SPECIAL INSTRUCTION: ' + 
-  ('USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.' if plan_modified else 
-   'USER IS REQUESTING A NEW WORKOUT PLAN. Use this EXACT format for each exercise:\n- **Exercise Name**: 3 sets x 12 reps')) if create_plan else ''}
+{special_instruction}
 
 For workout plans, use this EXACT structure:
 Day 1: [Focus Area]  
