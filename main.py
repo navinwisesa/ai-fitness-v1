@@ -119,28 +119,31 @@ def extract_exercises_from_day_text(day_text):
         line = line.strip()
         if not line or line.startswith(('Rest', 'Day off', 'Recovery')):
             continue
+        
+        # Skip section headers
+        if line.upper() in ['WARM-UP', 'WORKOUT', 'COOL-DOWN']:
+            continue
             
         # Multiple patterns to catch different formats
         patterns = [
-            r'[-•*]\s*\*\*([^*]+?)\*\*\s*:\s*(.+)',  # - **Exercise**: details
-            r'[-•*]\s*([^:]+?)\s*:\s*(.+)',          # - Exercise: details  
-            r'[-•*]\s*([^-]+?)\s*-\s*(.+)',          # - Exercise - details
-            r'(\d+\.\s*)?([^:]+?)\s*:\s*(.+)',       # 1. Exercise: details
+            r'[-•*]\s*\*\*([^*]+?)\*\*\s*:\s*([^-\n]+)(?:\s*-\s*(.+))?',  # With instructions
+            r'[-•*]\s*\*\*([^*]+?)\*\*\s*:\s*(.+)',  # Without instructions
+            r'[-•*]\s*([^:]+?)\s*:\s*(.+)',          # Simple format
         ]
         
         exercise_match = None
+        instructions = None
+        
         for pattern in patterns:
             exercise_match = re.search(pattern, line)
             if exercise_match:
+                if len(exercise_match.groups()) >= 3:
+                    instructions = exercise_match.group(3)
                 break
         
         if exercise_match:
-            if len(exercise_match.groups()) >= 3:  # Pattern with number
-                exercise_name = exercise_match.group(2).strip()
-                details = exercise_match.group(3).strip()
-            else:  # Pattern without number
-                exercise_name = exercise_match.group(1).strip()
-                details = exercise_match.group(2).strip()
+            exercise_name = exercise_match.group(1).strip()
+            details = exercise_match.group(2).strip()
             
             # Clean exercise name
             exercise_name = re.sub(r'\*+', '', exercise_name).strip()
@@ -156,6 +159,11 @@ def extract_exercises_from_day_text(day_text):
                     'weight': weight,
                     'category': categorize_exercise(exercise_name)
                 }
+                
+                # Add instructions if available
+                if instructions and instructions.strip():
+                    exercise['instructions'] = instructions.strip()
+                
                 exercises.append(exercise)
                 print(f"DEBUG: Extracted exercise: {exercise_name} - {sets}x{reps}")
     
@@ -739,14 +747,21 @@ CRITICAL FORMATTING RULE: Always format exercises as **Exercise Name**: sets x r
 
 For workout plans, use this EXACT structure:
 Day 1: [Focus Area]  
-- **Barbell Bench Press**: 3 sets x 8 reps
-- **Incline Dumbbell Press**: 3 sets x 10 reps
-- **Dumbbell Bicep Curls**: 3 sets x 12 reps
+WARM-UP:
+- **Arm Circles**: 2 sets x 10 reps - Large circles forward and backward
+- **Light Cardio**: 5 minutes - Light jogging in place
+- **Dynamic Stretching**: 3 minutes - Gentle movements to activate muscles
 
-Day 2: [Focus Area]
-- **Pull-ups**: 3 sets x 10 reps  
-- **Barbell Rows**: 3 sets x 8 reps
-- **Hammer Curls**: 3 sets x 10 reps
+WORKOUT:
+- **Barbell Bench Press**: 3 sets x 8 reps - Keep feet planted, control descent
+- **Incline Dumbbell Press**: 3 sets x 10 reps - Focus on upper chest
+
+COOL-DOWN:
+- **Light Walking**: 3 minutes - Gentle walking to bring heart rate down
+- **Chest Stretch**: 30 seconds - Doorway stretch, hold each arm
+- **Deep Breathing**: 2 minutes - Slow, controlled breathing
+
+IMPORTANT: Always include WARM-UP, WORKOUT, and COOL-DOWN sections with specific instructions after each exercise.
 
 IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image extraction."""
 
