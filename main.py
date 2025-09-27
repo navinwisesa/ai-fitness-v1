@@ -454,17 +454,18 @@ def should_include_images(user_message, ai_response):
     return fitness_related and (instructional or 'workout' in combined_text or 'exercise' in combined_text)
 
 def extract_exercises_from_text(text):
-    """Comprehensive exercise extraction that captures ALL exercises"""
+    """Comprehensive exercise extraction that gets ALL exercises from workout plans"""
     found_exercises = []
     
     print(f"DEBUG: Input text length: {len(text)}")
-    print(f"DEBUG: Text sample: {text[:300]}...")
+    print(f"DEBUG: Text sample: {text[:500]}...")
     
-    # Method 1: Extract from workout plan data FIRST (most comprehensive)
+    # Method 1: Extract directly from parsed workout plan (most comprehensive)
     try:
         workout_plans = parse_workout_plan_from_text(text)
         print(f"DEBUG: Found {len(workout_plans)} workout plans")
         
+        all_plan_exercises = []
         for plan in workout_plans:
             exercises = plan.get('exercises', [])
             print(f"DEBUG: Day {plan.get('day')} has {len(exercises)} exercises")
@@ -475,26 +476,39 @@ def extract_exercises_from_text(text):
                 exercise_name = re.sub(r'\*+', '', exercise_name).strip()
                 
                 if exercise_name and len(exercise_name) > 2:
-                    found_exercises.append(exercise_name)
-                    print(f"DEBUG: Added exercise from workout plan: '{exercise_name}'")
+                    all_plan_exercises.append(exercise_name)
+                    print(f"DEBUG: Added from workout plan: '{exercise_name}'")
+        
+        # Add all exercises from workout plan
+        found_exercises.extend(all_plan_exercises)
+        print(f"DEBUG: Total exercises from workout plans: {len(all_plan_exercises)}")
+        
     except Exception as e:
         print(f"DEBUG: Error parsing workout plans: {e}")
     
-    # Method 2: Extract from **Exercise**: format patterns
-    if len(found_exercises) < 5:  # If we haven't found many exercises, try regex
-        print("DEBUG: Trying additional regex patterns...")
+    # Method 2: Extract using comprehensive regex patterns
+    if len(found_exercises) == 0:
+        print("DEBUG: No exercises from workout plan parsing, using regex fallback...")
         
         patterns = [
-            r'\*\*([^*]+?)\*\*\s*:\s*\d+\s*sets',  # **Exercise**: 3 sets
-            r'[-•]\s*\*\*([^*]+?)\*\*\s*:',        # - **Exercise**:
-            r'\*\*([^*]+?)\*\*\s*[-–—]\s*\d+',     # **Exercise** - 3
+            # Pattern 1: **Exercise**: format
+            r'\*\*([^*]+?)\*\*\s*:\s*\d+\s*sets?\s*[x×]\s*\d+',
+            # Pattern 2: - **Exercise**: format
+            r'[-•*]\s*\*\*([^*]+?)\*\*\s*:\s*\d+\s*sets?',
+            # Pattern 3: Exercise: sets x reps
+            r'[-•*]\s*([^:]+?)\s*:\s*\d+\s*sets?\s*[x×]\s*\d+\s*reps?',
+            # Pattern 4: Exercise - sets x reps
+            r'[-•*]\s*([^-]+?)\s*[-–—]\s*\d+\s*[x×]\s*\d+',
         ]
         
-        for pattern in patterns:
+        for i, pattern in enumerate(patterns):
+            print(f"DEBUG: Trying pattern {i+1}: {pattern}")
             matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+            
             for match in matches:
                 exercise_name = match.strip()
                 # Clean the name
+                exercise_name = re.sub(r'\*+', '', exercise_name).strip()
                 exercise_name = re.sub(r'^(a|an|the)\s+', '', exercise_name, flags=re.IGNORECASE)
                 exercise_name = re.sub(r'\s+', ' ', exercise_name)
                 
@@ -502,35 +516,7 @@ def extract_exercises_from_text(text):
                     exercise_name not in found_exercises and
                     not any(word in exercise_name.lower() for word in ['day', 'workout', 'training', 'rest'])):
                     found_exercises.append(exercise_name)
-                    print(f"DEBUG: Added exercise from regex: '{exercise_name}'")
-    
-    # Method 3: Find exercises from day sections manually
-    if len(found_exercises) < 3:
-        print("DEBUG: Trying manual day section parsing...")
-        
-        # Split by day sections
-        day_sections = re.split(r'\n(?=Day\s+\d+)', text, flags=re.IGNORECASE)
-        
-        for section in day_sections:
-            if 'Day' in section:
-                print(f"DEBUG: Processing section: {section[:100]}...")
-                
-                # Find all lines that look like exercise descriptions
-                lines = section.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    
-                    # Look for patterns like "- Exercise: sets x reps" or "• Exercise: sets x reps"
-                    exercise_match = re.search(r'[-•*]\s*\*?\*?([^:*]+?)\*?\*?\s*:\s*\d+\s*(?:sets?|x)', line, re.IGNORECASE)
-                    if exercise_match:
-                        exercise_name = exercise_match.group(1).strip()
-                        exercise_name = re.sub(r'\*+', '', exercise_name).strip()  # Remove markdown
-                        
-                        if (len(exercise_name) > 2 and 
-                            exercise_name not in found_exercises and
-                            not any(skip in exercise_name.lower() for skip in ['day', 'rest', 'break'])):
-                            found_exercises.append(exercise_name)
-                            print(f"DEBUG: Added exercise from manual parsing: '{exercise_name}'")
+                    print(f"DEBUG: Added from pattern {i+1}: '{exercise_name}'")
     
     # Remove duplicates while preserving order
     unique_exercises = []
@@ -542,7 +528,9 @@ def extract_exercises_from_text(text):
             unique_exercises.append(exercise)
     
     print(f"DEBUG: Final unique exercises: {unique_exercises}")
-    return unique_exercises[:8]  # Limit to 8 exercises
+    print(f"DEBUG: Total exercises found: {len(unique_exercises)}")
+    return unique_exercises[:100]  # Increase limit to 100 exercises
+
 
 
 # Also update the main fitness_trainer function to better handle exercise extraction
@@ -801,12 +789,16 @@ IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image 
 
         reply = result["choices"][0]["message"]["content"]
         print(f"DEBUG: AI Reply length: {len(reply)}")
-        print(f"DEBUG: AI Reply sample: {reply[:200]}...")
+        print(f"DEBUG: AI Reply contains 'Day': {'Day' in reply}")
         
         workout_plan = []
         if create_plan:
             workout_plan = parse_workout_plan_from_text(reply)
             print(f"DEBUG: Parsed {len(workout_plan)} workout days")
+            # Log all exercises in workout plan
+            for plan in workout_plan:
+                day_exercises = [ex.get('name', '') for ex in plan.get('exercises', [])]
+                print(f"DEBUG: Day {plan.get('day')} exercises: {day_exercises}")
         
         exercise_images = {}
         if include_images and should_include_images(user_message, reply):
@@ -814,8 +806,8 @@ IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image 
             detected_exercises = extract_exercises_from_text(reply)
             print(f"DEBUG: Detected {len(detected_exercises)} exercises for images: {detected_exercises}")
             
-            # Search for images for each detected exercise
-            for exercise in detected_exercises[:6]:  # Limit to 6 to avoid too many API calls
+            # Search for images for ALL detected exercises
+            for exercise in detected_exercises:
                 print(f"DEBUG: Searching images for exercise: '{exercise}'")
                 images = search_exercise_images(exercise, max_results=2)
                 if images:
@@ -824,7 +816,7 @@ IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image 
                 else:
                     print(f"DEBUG: No images found for '{exercise}'")
 
-        print(f"DEBUG: Final exercise_images contains: {list(exercise_images.keys())}")
+        print(f"DEBUG: Final exercise_images contains {len(exercise_images)} exercises: {list(exercise_images.keys())}")
         
         return jsonify({
             "user_message": user_message,
