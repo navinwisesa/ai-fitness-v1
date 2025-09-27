@@ -491,159 +491,7 @@ def extract_exercises_from_text(text):
     return unique_exercises[:8]  # Limit to 8 exercises to avoid too many API calls
 
 # Also update the main fitness_trainer function to better handle exercise extraction
-@app.route("/fitness-trainer", methods=["POST"])
-def fitness_trainer():
-    try:
-        data = request.get_json()
-        user_message = data.get("message", "")
-        user_profile = data.get("user_profile", {})
-        enable_search = data.get("enable_search", True)
-        include_images = data.get("include_images", True)
-        create_plan = data.get("create_plan", False)
-        active_plan = data.get("active_plan")
-        conversation_summary = data.get("conversation_summary", "")
 
-        if not user_message:
-            return jsonify({"error": "Message is required"}), 400
-            
-        # Enhanced plan detection with context awareness
-        if not create_plan:
-            create_plan = should_create_workout_plan(user_message)
-            
-        # Check if this is a plan modification request
-        plan_modified = False
-        if active_plan and is_plan_modification_request(user_message, active_plan):
-            create_plan = True
-            plan_modified = True
-
-        search_context = ""
-        search_used = False
-
-        if enable_search and should_search(user_message):
-            print(f"Searching for: {user_message}")
-            search_context = search_fitness_info(user_message)
-            search_used = True
-
-        system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance.
-
-CONTINUITY INSTRUCTIONS:
-- Remember the conversation history and active workout plan
-- Reference previous discussions when relevant
-- If user asks about modifying the active plan, edit it instead of creating new one
-- Maintain consistent recommendations based on user's profile and goals
-
-{'ACTIVE WORKOUT PLAN CONTEXT: ' + json.dumps(active_plan) if active_plan else 'NO ACTIVE PLAN: Create new plans when requested'}
-
-{'CONVERSATION HISTORY: ' + conversation_summary if conversation_summary else 'NEW CONVERSATION: Establish context'}
-
-{('SPECIAL INSTRUCTION: ' + 
-  ('USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.' if plan_modified else 
-   'USER IS REQUESTING A NEW WORKOUT PLAN. Provide structured day-by-day format with exercises in **Exercise Name**: format.')) if create_plan else ''}
-
-CORE PRINCIPLES:
-- Safety First: Always prioritize proper form and injury prevention
-- Evidence-Based Approach: Base recommendations on established fitness science
-- Progressive Overload: Gradually increase difficulty over time
-- Individual Adaptation: Consider user's fitness level and goals
-
-IMPORTANT: When mentioning exercises, always format them as **Exercise Name** for proper extraction.
-
-For workout plans, use this EXACT structure:
-Day 1: [Focus Area]
-- **Exercise Name**: 3 sets x 12 reps
-- **Another Exercise**: 3 sets x 10 reps
-
-IMPORTANT LIMITATIONS AND BOUNDARIES:
-- Never provide medical diagnoses or treatment advice
-- Always recommend consulting healthcare professionals for injuries
-- Emphasize the importance of proper warm-up and cool-down
-- Suggest modifications for different fitness levels
-
-When answering, keep responses concise and actionable. If creating a workout plan, provide a clear day-by-day structure."""
-
-        messages = [{"role": "system", "content": system_prompt}]
-        if search_context and search_used:
-            messages.append({
-                "role": "system",
-                "content": f"CURRENT SEARCH RESULTS (Use this information to enhance your response):\n{search_context}\n\nPlease incorporate relevant information from these search results while maintaining your evidence-based approach."
-            })
-
-        messages.append({"role": "user", "content": user_message})
-        payload = {
-            "model": MODEL,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 1500
-        }
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}"
-        }
-
-        response = requests.post(OPENROUTER_URL, headers=headers, json=payload)
-
-        if response.status_code != 200:
-            return jsonify({
-                "error": "Failed to connect to OpenRouter",
-                "details": response.text,
-                "status_code": response.status_code
-            }), 500
-
-        result = response.json()
-
-        if "choices" not in result or not result["choices"]:
-            return jsonify({
-                "error": "Invalid response from OpenRouter",
-                "details": result
-            }), 500
-
-        reply = result["choices"][0]["message"]["content"]
-        print(f"DEBUG: AI Reply: {reply[:300]}...")
-        
-        learned_preferences = extract_user_preferences(user_message, reply)
-        conversation_summary = generate_conversation_summary(user_message, reply, learned_preferences)
-        
-        workout_plan = []
-        if create_plan:
-            workout_plan = parse_workout_plan_from_text(reply)
-            print(f"DEBUG: Parsed workout plan: {len(workout_plan)} days")
-        
-        exercise_images = {}
-        if include_images and should_include_images(user_message, reply):
-            detected_exercises = extract_exercises_from_text(reply)
-            print(f"DEBUG: Detected exercises for images: {detected_exercises}")
-            
-            for exercise in detected_exercises[:5]:  # Limit to 5 to avoid too many API calls
-                print(f"DEBUG: Searching images for: {exercise}")
-                images = search_exercise_images(exercise, max_results=2)
-                if images:
-                    exercise_images[exercise] = images
-                    print(f"DEBUG: Found {len(images)} images for {exercise}")
-                else:
-                    print(f"DEBUG: No images found for {exercise}")
-
-        print(f"DEBUG: Final exercise_images keys: {list(exercise_images.keys())}")
-        
-        return jsonify({
-            "user_message": user_message,
-            "ai_reply": reply,
-            "exercise_images": exercise_images,
-            "workout_plan": workout_plan,
-            "plan_created": len(workout_plan) > 0 and not plan_modified,
-            "plan_updated": plan_modified,
-            "conversation_summary": generate_conversation_summary(user_message, reply),
-            "search_used": search_used,
-            "timestamp": datetime.now().isoformat(),
-            "model_used": MODEL
-        })
-
-    except Exception as e:
-        print(f"ERROR in fitness_trainer: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "type": type(e).__name__
-        }), 500  # Return unique exercises, max 8
 def _is_valid_exercise_name(name):
     """Validate if extracted text is likely an exercise name"""
     if not name or len(name) < 3 or len(name) > 50:
@@ -803,8 +651,8 @@ def fitness_trainer():
         enable_search = data.get("enable_search", True)
         include_images = data.get("include_images", True)
         create_plan = data.get("create_plan", False)
-        active_plan = data.get("active_plan")  # Added: current active plan
-        conversation_summary = data.get("conversation_summary", "")  # Added: conversation context
+        active_plan = data.get("active_plan")
+        conversation_summary = data.get("conversation_summary", "")
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
@@ -826,6 +674,7 @@ def fitness_trainer():
             print(f"Searching for: {user_message}")
             search_context = search_fitness_info(user_message)
             search_used = True
+
         system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance.
 
 CONTINUITY INSTRUCTIONS:
@@ -840,20 +689,20 @@ CONTINUITY INSTRUCTIONS:
 
 {('SPECIAL INSTRUCTION: ' + 
   ('USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.' if plan_modified else 
-   'USER IS REQUESTING A NEW WORKOUT PLAN. Provide structured day-by-day format.')) if create_plan else ''}
+   'USER IS REQUESTING A NEW WORKOUT PLAN. Provide structured day-by-day format with exercises in **Exercise Name**: format.')) if create_plan else ''}
+
 CORE PRINCIPLES:
 - Safety First: Always prioritize proper form and injury prevention
 - Evidence-Based Approach: Base recommendations on established fitness science
 - Progressive Overload: Gradually increase difficulty over time
 - Individual Adaptation: Consider user's fitness level and goals
 
-Format exercises clearly like:
-**Exercise Name**: Description of the exercise and technique.
+IMPORTANT: When mentioning exercises, always format them as **Exercise Name** for proper extraction.
 
-For workout plans, use this structure:
+For workout plans, use this EXACT structure:
 Day 1: [Focus Area]
-- Exercise 1: 3 sets x 12 reps
-- Exercise 2: 3 sets x 10 reps
+- **Exercise Name**: 3 sets x 12 reps
+- **Another Exercise**: 3 sets x 10 reps
 
 IMPORTANT LIMITATIONS AND BOUNDARIES:
 - Never provide medical diagnoses or treatment advice
@@ -862,6 +711,7 @@ IMPORTANT LIMITATIONS AND BOUNDARIES:
 - Suggest modifications for different fitness levels
 
 When answering, keep responses concise and actionable. If creating a workout plan, provide a clear day-by-day structure."""
+
         messages = [{"role": "system", "content": system_prompt}]
         if search_context and search_used:
             messages.append({
@@ -900,40 +750,51 @@ When answering, keep responses concise and actionable. If creating a workout pla
             }), 500
 
         reply = result["choices"][0]["message"]["content"]
+        print(f"DEBUG: AI Reply: {reply[:300]}...")
+        
         learned_preferences = extract_user_preferences(user_message, reply)
         conversation_summary = generate_conversation_summary(user_message, reply, learned_preferences)
+        
         workout_plan = []
         if create_plan:
             workout_plan = parse_workout_plan_from_text(reply)
+            print(f"DEBUG: Parsed workout plan: {len(workout_plan)} days")
+        
         exercise_images = {}
         if include_images and should_include_images(user_message, reply):
             detected_exercises = extract_exercises_from_text(reply)
-            print(f"Detected exercises: {detected_exercises}")
+            print(f"DEBUG: Detected exercises for images: {detected_exercises}")
             
-            for exercise in detected_exercises[:3]:
+            for exercise in detected_exercises[:5]:  # Limit to 5 to avoid too many API calls
+                print(f"DEBUG: Searching images for: {exercise}")
                 images = search_exercise_images(exercise, max_results=2)
                 if images:
                     exercise_images[exercise] = images
-                    print(f"Found {len(images)} images for {exercise}")
+                    print(f"DEBUG: Found {len(images)} images for {exercise}")
+                else:
+                    print(f"DEBUG: No images found for {exercise}")
 
+        print(f"DEBUG: Final exercise_images keys: {list(exercise_images.keys())}")
+        
         return jsonify({
             "user_message": user_message,
             "ai_reply": reply,
             "exercise_images": exercise_images,
             "workout_plan": workout_plan,
             "plan_created": len(workout_plan) > 0 and not plan_modified,
-            "plan_updated": plan_modified,  # New field to indicate modification
-            "conversation_summary": generate_conversation_summary(user_message, reply),  # New field
+            "plan_updated": plan_modified,
+            "conversation_summary": generate_conversation_summary(user_message, reply),
             "search_used": search_used,
             "timestamp": datetime.now().isoformat(),
             "model_used": MODEL
         })
 
     except Exception as e:
+        print(f"ERROR in fitness_trainer: {str(e)}")
         return jsonify({
             "error": str(e),
             "type": type(e).__name__
-        }), 500
+        }), 500  # Return unique exercises, max 8
       
 def generate_conversation_summary(user_message, ai_response, preferences=None):
     """Generate detailed summary for rolling conversation memory"""
