@@ -435,35 +435,36 @@ def should_include_images(user_message, ai_response):
     return fitness_related and (instructional or 'workout' in combined_text or 'exercise' in combined_text)
 
 def extract_exercises_from_text(text):
-    """Extract exercise names from text"""
-    exercise_patterns = [
-        r'\*\*([^*]+)\*\*:',
-        r'\d+\.\s*([^-\n]+)(?:\s*[-–]|\n)',
-        r'(?:perform|do|try|practice|start with|include)\s+([^,.!?\n]+?)(?:\s+(?:exercise|stretch|movement|pose))?(?:[,.!?\n]|$)',
-        r'the\s+([^,.!?\n]{2,30}?)(?:\s+(?:exercise|stretch|movement|pose|position))',
+    """Enhanced extraction that handles workout plan formats better"""
+    found_exercises = []
+    
+    # Pattern 1: Day X format with exercises
+    day_sections = re.split(r'\n(?=Day\s+\d+)', text, flags=re.IGNORECASE)
+    
+    for section in day_sections:
+        # Extract exercises from each day section
+        exercise_lines = re.findall(r'[-*•]\s*([^:\n]+?)(?:\s*:\s*\d+|\s*-\s*\d+|$)', section, re.MULTILINE)
+        
+        for exercise in exercise_lines:
+            exercise = re.sub(r'\*+', '', exercise).strip()  # Remove markdown
+            if _is_valid_exercise_name(exercise):
+                found_exercises.append(exercise)
+    
+    # Pattern 2: General exercise mentions
+    general_patterns = [
+        r'\*\*([^*]+)\*\*(?:\s*:|$)',  # **Exercise Name**:
+        r'(?:perform|do|try)\s+([^,.!?\n]+?)(?:\s+(?:exercise|movement|lift))?(?:[,.!?\n]|$)',
     ]
     
-    found_exercises = []
-    for pattern in exercise_patterns:
+    for pattern in general_patterns:
         matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
         for match in matches:
             exercise_name = match.group(1).strip()
-            exercise_name = re.sub(r'^(a|an|the)\s+', '', exercise_name, flags=re.IGNORECASE)
-            exercise_name = re.sub(r'\s+', ' ', exercise_name)
-            
+            exercise_name = re.sub(r'\*+', '', exercise_name)  # Remove markdown
             if _is_valid_exercise_name(exercise_name):
                 found_exercises.append(exercise_name)
     
-    unique_exercises = []
-    seen = set()
-    for exercise in found_exercises:
-        lower_exercise = exercise.lower()
-        if lower_exercise not in seen and len(lower_exercise) > 2:
-            seen.add(lower_exercise)
-            unique_exercises.append(exercise)
-    
-    return unique_exercises[:5]
-
+    return list(set(found_exercises))[:8]  # Return unique exercises, max 8
 def _is_valid_exercise_name(name):
     """Validate if extracted text is likely an exercise name"""
     if not name or len(name) < 3 or len(name) > 50:
