@@ -749,8 +749,6 @@ For workout plans, use this EXACT structure:
 Day 1: [Focus Area]  
 WARM-UP:
 - **Arm Circles**: 2 sets x 10 reps - Large circles forward and backward
-- **Light Cardio**: 5 minutes - Light jogging in place
-- **Dynamic Stretching**: 3 minutes - Gentle movements to activate muscles
 
 WORKOUT:
 - **Barbell Bench Press**: 3 sets x 8 reps - Keep feet planted, control descent
@@ -762,7 +760,7 @@ COOL-DOWN:
 - **Deep Breathing**: 2 minutes - Slow, controlled breathing
 
 IMPORTANT: Always include WARM-UP, WORKOUT, and COOL-DOWN sections with specific instructions after each exercise.
-
+IMPORTANT: Exercises in WARM-UP and COOL-DOWN sections must be specific; do not include vague terms such as "cardio" or "stretching". Instead, use exact movements (e.g. arm circles or lunges)
 IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image extraction."""
 
         messages = [{"role": "system", "content": system_prompt}]
