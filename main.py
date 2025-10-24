@@ -966,11 +966,13 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health_check():
-    """Health check endpoint"""
+    """Comprehensive health check endpoint"""
     try:
+        # Quick search functionality test
         test_search = search_fitness_info("fitness", max_results=1)
         search_working = "No relevant search results found." not in test_search
         
+        # Quick image search test  
         test_images = search_exercise_images("push-ups", max_results=1)
         images_working = len(test_images) > 0
 
@@ -988,17 +990,11 @@ def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }), 503
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({
-        "status": "ready", 
-        "timestamp": datetime.now().isoformat(),
-        "model": "active"
-    })
 
 @app.route("/warmup", methods=["GET"])  
 def warmup():
-    # Force imports to load
+    """Force imports to load for faster cold starts"""
+    # These imports are already loaded, but this ensures they're warm
     import requests
     from duckduckgo_search import DDGS
     return jsonify({"status": "warmed_up"})
