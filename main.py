@@ -6,6 +6,24 @@ import json
 from datetime import datetime, timedelta
 import re
 import random
+import threading
+
+# Pre-warm heavy imports in background thread
+def preload_dependencies():
+    try:
+        # Import your heaviest dependencies here
+        import requests
+        from duckduckgo_search import DDGS
+        import json
+        from datetime import datetime
+        import re
+        import random
+        print("✅ Dependencies pre-loaded")
+    except Exception as e:
+        print(f"⚠️ Pre-load warning: {e}")
+
+# Start pre-loading immediately
+threading.Thread(target=preload_dependencies, daemon=True).start()
 
 app = Flask(__name__)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
@@ -970,7 +988,21 @@ def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }), 503
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({
+        "status": "ready", 
+        "timestamp": datetime.now().isoformat(),
+        "model": "active"
+    })
 
+@app.route("/warmup", methods=["GET"])  
+def warmup():
+    # Force imports to load
+    import requests
+    from duckduckgo_search import DDGS
+    return jsonify({"status": "warmed_up"})
+  
 if __name__ == "__main__":
     try:
         test_result = search_fitness_info("fitness test", max_results=1)
