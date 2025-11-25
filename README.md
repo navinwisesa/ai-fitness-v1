@@ -9,4 +9,4 @@ A simple AI-powered fitness assistant using computer vision for real-time pose e
 - Docker-ready deployment
 
 ## Paper
-See `RAG-PE-Fitness-Assistant-Study.pdf` for the full research paper.
+See `RAG-Prompt-Engineering-Fitness-Assistant.pdf` for the full research paper.
