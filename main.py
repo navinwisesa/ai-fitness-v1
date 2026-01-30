@@ -9,7 +9,7 @@ import random
 
 app = Flask(__name__)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
-                               "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")
+                               "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")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "meta-llama/llama-3.3-70b-instruct:free"
