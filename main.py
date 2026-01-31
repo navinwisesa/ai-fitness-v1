@@ -12,7 +12,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
                                "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")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
+MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 FITNESS_INDICATORS = [
     'exercise', 'workout', 'stretch', 'movement', 'pose', 'position', 'form',
     'technique', 'drill', 'routine', 'training', 'bicep', 'tricep', 'chest',
