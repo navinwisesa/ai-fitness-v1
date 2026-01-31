@@ -778,14 +778,14 @@ IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image 
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}"
+            "Authorization": f"Bearer {GROQ_API_KEY}"
         }
 
-        response = requests.post(OPENROUTER_URL, headers=headers, json=payload)
+        response = requests.post(GROQ_URL, headers=headers, json=payload)
 
         if response.status_code != 200:
             return jsonify({
-                "error": "Failed to connect to OpenRouter",
+                "error": "Failed to connect to GROQ",
                 "details": response.text,
                 "status_code": response.status_code
             }), 500
@@ -794,7 +794,7 @@ IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image 
 
         if "choices" not in result or not result["choices"]:
             return jsonify({
-                "error": "Invalid response from OpenRouter", 
+                "error": "Invalid response from GROQ", 
                 "details": result
             }), 500
 
