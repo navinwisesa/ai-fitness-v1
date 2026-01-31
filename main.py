@@ -11,7 +11,6 @@ app = Flask(__name__)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")  # Replace with your key
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = "qwen/qwen-2.5-32b-instruct"
-MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 FITNESS_INDICATORS = [
     'exercise', 'workout', 'stretch', 'movement', 'pose', 'position', 'form',
     'technique', 'drill', 'routine', 'training', 'bicep', 'tricep', 'chest',
