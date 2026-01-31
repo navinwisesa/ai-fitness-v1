@@ -9,7 +9,7 @@ import random
 
 app = Flask(__name__)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY",
-                               "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")
+                               "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")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
