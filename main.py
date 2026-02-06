@@ -8,7 +8,7 @@ import re
 import random
 
 app = Flask(__name__)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")  # Replace with your key
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")  # Replace with your key
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL = "llama-3.3-70b-versatile"
 FITNESS_INDICATORS = [
