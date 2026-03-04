@@ -10,7 +10,7 @@ import random
 app = Flask(__name__)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "openai/gpt-oss-120b"
+MODEL = "llama-3.3-70b-versatile"
 FITNESS_INDICATORS = [
     'exercise', 'workout', 'stretch', 'movement', 'pose', 'position', 'form',
     'technique', 'drill', 'routine', 'training', 'bicep', 'tricep', 'chest',
