@@ -759,7 +759,8 @@ COOL-DOWN:
 
 IMPORTANT: Always include WARM-UP, WORKOUT, and COOL-DOWN sections with specific instructions after each exercise.
 IMPORTANT: Exercises in WARM-UP and COOL-DOWN sections must be specific; do not include vague terms such as "cardio" or "stretching". Instead, use exact movements (e.g. arm circles or lunges)
-IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image extraction."""
+IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image extraction.
+IMPORTANT: If the user requests a multi-day plan, you MUST output ALL days completely. Never stop after Day 1."""
 
         messages = [{"role": "system", "content": system_prompt}]
         if search_context and search_used:
