@@ -731,7 +731,7 @@ def fitness_trainer():
             if plan_modified:
                 special_instruction = 'SPECIAL INSTRUCTION: USER WANTS TO MODIFY EXISTING PLAN. Please update the active plan instead of creating new one.'
             else:
-                special_instruction = 'SPECIAL INSTRUCTION: USER IS REQUESTING A NEW WORKOUT PLAN. Use this EXACT format for each exercise:\n- **Exercise Name**: 3 sets x 12 reps'
+                special_instruction = special_instruction = 'SPECIAL INSTRUCTION: USER IS REQUESTING A NEW WORKOUT PLAN. You MUST generate ALL days of the plan (e.g. if a 3-day plan, output Day 1, Day 2, AND Day 3 in full). Use this EXACT format for each exercise:\n- **Exercise Name**: 3 sets x 12 reps'
         
         system_prompt = f"""You are an AI personal fitness and health trainer designed to provide helpful, informative, and supportive guidance.
 
@@ -773,7 +773,7 @@ IMPORTANT: Every exercise must be in **Exercise Name**: format for proper image 
             "model": MODEL,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 1500
+            "max_tokens": 4000
         }
 
         headers = {
